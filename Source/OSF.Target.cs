@@ -1,4 +1,7 @@
+﻿// OSF.Target.cs
+
 using UnrealBuildTool;
+using System.Collections.Generic;
 
 public class OSFTarget : TargetRules
 {
@@ -6,10 +9,18 @@ public class OSFTarget : TargetRules
     {
         Type = TargetType.Game;
 
-        // UE 5.3: use V2 or Latest (V5 does not exist here)
-        DefaultBuildSettings = BuildSettingsVersion.V2;
-        IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
+        // ✅ Use the latest UE5.6 defaults
+        DefaultBuildSettings = BuildSettingsVersion.V5;
 
-        ExtraModuleNames.Add("OSF");
+        // ✅ Explicit C++20 (UE5.6 no longer supports C++17)
+        CppStandard = CppStandardVersion.Cpp20;
+
+        // ✅ Allow overrides in installed engine (instead of Unique)
+        bOverrideBuildEnvironment = true;
+
+        // Example: if you want to keep strict off (optional)
+        WindowsPlatform.bStrictConformanceMode = false;
+
+        ExtraModuleNames.AddRange(new string[] { "OSF" });
     }
 }
