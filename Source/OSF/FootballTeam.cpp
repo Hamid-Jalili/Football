@@ -1,43 +1,39 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-#include "Ballsack.h"            // <-- MUST be FIRST
-#include "OSF.h"
 #include "FootballTeam.h"
+#include "Ballsack.h"
+#include "Kismet/GameplayStatics.h"
 
-float Dist = GetDistanceTo(Ball); // where Ball is ABallsack*
-
-// Sets default values
 AFootballTeam::AFootballTeam()
 {
- 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-
 }
 
-// Called when the game starts or when spawned
 void AFootballTeam::BeginPlay()
 {
 	Super::BeginPlay();
-	
 }
 
-// Called every frame
-void AFootballTeam::Tick( float DeltaTime )
+void AFootballTeam::Tick(float DeltaSeconds)
 {
-	Super::Tick( DeltaTime );
-
+	Super::Tick(DeltaSeconds);
 }
 
-AFootballer* AFootballTeam::GetClosestFootballerToBall(ABallsack* ball)
+AFootballer* AFootballTeam::GetClosestFootballerToBall(ABallsack* Ball)
 {
-    AFootballer* closestFootballer = nullptr;
-	float closestDistance = FLT_MAX;
-    for (AFootballer* footballer: Footballers) {
-        float distance = footballer->GetDistanceTo(ball);
-        if (distance < closestDistance) {
-            closestFootballer = footballer;
-            closestDistance = distance;
-        }
-    }
-    return closestFootballer;
+	if (!Ball) return nullptr;
+
+	AFootballer* Closest = nullptr;
+	float BestDistSq = FLT_MAX;
+
+	for (AFootballer* F : Footballers)
+	{
+		if (!F) continue;
+		const float DistSq = FVector::DistSquared(F->GetActorLocation(), Ball->GetActorLocation());
+		if (DistSq < BestDistSq)
+		{
+			BestDistSq = DistSq;
+			Closest = F;
+		}
+	}
+
+	return Closest;
 }

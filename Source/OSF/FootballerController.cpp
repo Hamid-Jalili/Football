@@ -1,12 +1,13 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-#include "OSF.h"
 #include "FootballerController.h"
+#include "OSF.h"
 #include "TeamGameState.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 #include "DefaultGameMode.h"
+
+// Fill out your copyright notice in the Description page of Project Settings.
+
 
 void AFootballerController::BeginPlay()
 {
@@ -86,7 +87,7 @@ void AFootballerController::SetupInputComponent()
 void AFootballerController::MoveForward(float axisValue)
 {
     if (ControlledFootballer != nullptr) {
-        if (Role >= ROLE_AutonomousProxy) {
+        if (GetLocalRole() >= ROLE_AutonomousProxy) {
             ControlledFootballer->SetDesiredMovement(FVector(ControlledFootballer->DesiredMovement.X, InputComponent->GetAxisValue(TEXT("MoveForward")), 0));
         }
 //        ControlledFootballer->DesiredMovement.Y = InputComponent->GetAxisValue(TEXT("MoveForward"));
@@ -101,7 +102,7 @@ void AFootballerController::MoveForward(float axisValue)
 void AFootballerController::MoveRight(float axisValue)
 {
     if (ControlledFootballer != nullptr) {
-        if (Role >= ROLE_AutonomousProxy) {
+        if (GetLocalRole() >= ROLE_AutonomousProxy) {
             ControlledFootballer->SetDesiredMovement(FVector(InputComponent->GetAxisValue(TEXT("MoveRight")), ControlledFootballer->DesiredMovement.Y, 0));
         }
 //        ControlledFootballer->DesiredMovement.X = InputComponent->GetAxisValue(TEXT("MoveRight"));

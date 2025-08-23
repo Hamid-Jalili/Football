@@ -1,12 +1,12 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #include "DefaultGameMode.h"
 #include "Ballsack.h"            // <-- MUST be FIRST
 #include "OSF.h"
-#include "DefaultGameMode.h"
 #include "TeamGameState.h"
 #include "FootballerController.h"
 #include "Kismet/GameplayStatics.h"
+
+// Fill out your copyright notice in the Description page of Project Settings.
+
 
 static UClass* BPBallClass;
 

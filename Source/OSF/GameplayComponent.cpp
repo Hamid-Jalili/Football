@@ -1,78 +1,73 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-#pragma once
-#include "Ballsack.h"            // <-- MUST be FIRST
-#include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
-#include "GameplayComponent.generated.h" // change name per file
-#include "OSF.h"
 #include "GameplayComponent.h"
+
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 
-// Sets default values for this component's properties
 UGameplayComponent::UGameplayComponent()
 {
-	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
-	// off to improve performance if you don't need them.
-	bWantsBeginPlay = true;
 	PrimaryComponentTick.bCanEverTick = true;
-
-	// ...
 }
 
-
-// Called when the game starts
 void UGameplayComponent::BeginPlay()
 {
 	Super::BeginPlay();
-
-	// ...
-	
 }
 
-
-// Called every frame
-void UGameplayComponent::TickComponent( float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction )
+void UGameplayComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
-	Super::TickComponent( DeltaTime, TickType, ThisTickFunction );
-
-	// ...
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 
-//ABallsack* GetBall()
-//{
-//    for (TActorIterator<ABallsack> ballItr(GetWorld()); ballItr; ballItr++)
-//    {
-//        
-//    }
-//}
-
-static float MIN_DISTANCE_FOR_TOUCH = 30;
-
-bool UGameplayComponent::CanKickBall(ACharacter *character, AActor *ball) {
-    FVector distance = character->GetActorLocation() - ball->GetActorLocation();
-    distance.Z = 0;
-    return distance.Size() < MIN_DISTANCE_FOR_TOUCH;
-}
-
-void UGameplayComponent::MoveToBallForKick(ACharacter *character, AActor *target, FVector desiredEndDirection, float deltaSeconds)
+// NOTE: Removed "const" to match header declaration and fix C2511.
+bool UGameplayComponent::CanKickBall(ACharacter* Character, AActor* Ball)
 {
-    FVector charPos = character->GetActorLocation();
-    FVector targetPos = target->GetActorLocation();
-    
-    FVector desiredPos = targetPos - desiredEndDirection * 100;
-    desiredPos.Z = charPos.Z;
-    
-    FVector movementVector = desiredPos - charPos;
-    movementVector.Normalize();
-    
-    //    DrawDebugLine(GetWorld(), charPos, charPos + movementVector * 100, FColor::Red, true, 5000, 10);
-    
-    movementVector *= deltaSeconds * 300; // 2 m/s
-    character->SetActorLocation(charPos + movementVector);
-    
-    FRotator rot = UKismetMathLibrary::FindLookAtRotation(charPos, targetPos);
-    rot.Pitch = 0;
-    rot.Roll = 0; // don't want the player to levitate looking down at the ball :|
-    character->SetActorRotation(rot);
+	if (!Character || !Ball)
+	{
+		return false;
+	}
+
+	FVector Distance = Character->GetActorLocation() - Ball->GetActorLocation();
+	Distance.Z = 0.f;
+	return Distance.Size() < 100.f;
 }
 
+void UGameplayComponent::MoveToBallForKick(ACharacter* Character, AActor* Ball, FVector DesiredEndDirection, float DeltaSeconds)
+{
+	if (!Character || !Ball)
+	{
+		return;
+	}
+
+	const FVector CharPos = Character->GetActorLocation();
+	const FVector BallPos = Ball->GetActorLocation();
+
+	// Rough prediction of where the ball will be by the time the character reaches it.
+	FVector ToBall = BallPos - CharPos;
+	ToBall.Z = 0.f;
+	const float Distance = ToBall.Size();
+
+	float MaxSpeed = 600.f;
+	if (const UCharacterMovementComponent* MoveComp = Character->GetCharacterMovement())
+	{
+		MaxSpeed = MoveComp->MaxWalkSpeed;
+	}
+
+	const float TimeToTarget = (MaxSpeed > 0.f) ? (Distance / MaxSpeed) : 0.f;
+	FVector PredictedBall = BallPos + Ball->GetVelocity() * TimeToTarget;
+	PredictedBall.Z = CharPos.Z;
+
+	FVector MoveDir = PredictedBall - CharPos;
+	if (!MoveDir.IsNearlyZero())
+	{
+		MoveDir.Z = 0.f;
+		MoveDir.Normalize();
+		Character->AddMovementInput(MoveDir, 1.f);
+	}
+
+	// Face the current ball position
+	FRotator LookAt = UKismetMathLibrary::FindLookAtRotation(CharPos, BallPos);
+	LookAt.Pitch = 0.f;
+	LookAt.Roll = 0.f;
+	Character->SetActorRotation(LookAt);
+}

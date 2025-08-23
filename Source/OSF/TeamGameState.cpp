@@ -1,236 +1,221 @@
-﻿// TeamGameState.cpp  — UE5 include order & headers
+// TeamGameState.cpp — UE5.3-friendly
 
-#include "TeamGameState.h"                 // ← own header FIRST
-
-#include "Net/UnrealNetwork.h"            // DOREPLIFETIME
-#include "UObject/UObjectGlobals.h"       // Spawn helpers etc.
-#include "UObject/ConstructorHelpers.h"   // FObjectFinder
-#include "Kismet/GameplayStatics.h"       // if you use UGameplayStatics
-
+#include "TeamGameState.h"              // must be first
+#include "Ballsack.h"
 #include "Footballer.h"
 #include "FootballTeam.h"
-#include "FootballerController.h"
+
+#include "UObject/ConstructorHelpers.h" // FClassFinder / FObjectFinder
 #include "Materials/MaterialInstanceConstant.h"
+#include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
+#include "Net/UnrealNetwork.h"          // DOREPLIFETIME
 
+// File-scope statics
+static TSubclassOf<AFootballer> GFootballerBPClass = nullptr;
+static UMaterialInstanceConstant* GOrangeMI = nullptr;
 
-static UClass* footballerClass;
-static UMaterialInstanceConstant* orangeMesh;
 ATeamGameState::ATeamGameState()
 {
-    static ConstructorHelpers::FObjectFinder<UClass> MyBPClass(TEXT("Blueprint'/Game/Blueprints/BPFootballer.BPFootballer_C'"));
-    footballerClass = MyBPClass.Object;
-	static ConstructorHelpers::FObjectFinder<UMaterialInstanceConstant> mesh(TEXT("MaterialInstanceConstant'/Game/Materials/MI_Template_BaseOrange.MI_Template_BaseOrange'"));
-	if (mesh.Succeeded())
+	// Find BPFootballer (expects the Blueprint asset to live at /Game/Blueprints/BPFootballer)
 	{
-		orangeMesh = mesh.Object;
+		static ConstructorHelpers::FClassFinder<AFootballer> BPClass(TEXT("/Game/Blueprints/BPFootballer"));
+		if (BPClass.Succeeded())
+		{
+			GFootballerBPClass = BPClass.Class;
+		}
+	}
+
+	// Find orange material instance
+	{
+		static ConstructorHelpers::FObjectFinder<UMaterialInstanceConstant> Mat(
+			TEXT("/Game/Materials/MI_Template_BaseOrange.MI_Template_BaseOrange"));
+		if (Mat.Succeeded())
+		{
+			GOrangeMI = Mat.Object;
+		}
 	}
 }
 
-void ATeamGameState::GetLifetimeReplicatedProps(TArray< FLifetimeProperty > & OutLifetimeProps) const
+void ATeamGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-    
-    DOREPLIFETIME(ATeamGameState, HomeTeam);
-    DOREPLIFETIME(ATeamGameState, AwayTeam);
-    DOREPLIFETIME(ATeamGameState, Ball);
-    
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ATeamGameState, HomeTeam);
+	DOREPLIFETIME(ATeamGameState, AwayTeam);
+	DOREPLIFETIME(ATeamGameState, Ball);
 }
 
 void ATeamGameState::BeginPlay()
 {
-    Super::BeginPlay();
-    
-    if (HasAuthority()) {
-        bool poop = true;
-    }
-    
-//    if (HasAuthority()) {
-//        HomeTeam = GetWorld()->SpawnActor<AFootballTeam>();
-//        AwayTeam = GetWorld()->SpawnActor<AFootballTeam>();
-//        
-//        LoadSampleState();
-//    }
-    
-//    if (HasAuthority()) {
-//        ATeamGameState* state = GetWorld()->GetGameState<ATeamGameState>();
-//        
-//        check(state != nullptr);
-//        check(state->HomeTeam != nullptr);
-//        check(state->AwayTeam != nullptr);
-//        
-//        // Set up the player controllers properly for co-op / vs.
-//        bool home = true;
-//        for(FConstPlayerControllerIterator Iterator = GetWorld()->GetPlayerControllerIterator(); Iterator; ++Iterator)
-//        {
-//            AFootballerController* controller = Cast<AFootballerController>(*Iterator);
-//            AFootballTeam *team;
-//            if (home) {
-//                team = state->HomeTeam;
-//            } else {
-//                team = state->AwayTeam;
-//            }
-//            
-//            home = !home; // alternate controllers b/t home and away
-//            
-//            // UE4 spawns a new footballer for each player controller by default--let's delete it and let our TeamGameState handle that.
-//            if (controller->GetPawn() != nullptr) {
-//                GetWorld()->DestroyActor(controller->GetPawn());
-//            }
-//            
-//            // Switch to the first open footballer on the controller's team
-//            check(team != nullptr);
-//            check(team->Footballers.Num() > 0);
-//            for (AFootballer* footballer : team->Footballers) {
-//                if (!footballer->IsControlledByPlayer()) {
-//                    controller->SwitchToFootballer(footballer);
-//                    break;
-//                }
-//            }
-//            check(controller->ControlledFootballer != nullptr);
-//            
-//        }
-//    }
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		// Your server-side init here (left as in your original)
+	}
 }
 
-struct FootballerInfo {
-    FString Name;
+/* ======= Everything below mirrors your original logic, but swaps
+		   footballerClass -> GFootballerBPClass and
+		   orangeMesh      -> GOrangeMI                                 ======= */
+
+struct FFootballerInfo { FString Name; };
+
+struct FPosition
+{
+	int IndexInFormation;
+	FString Name;
+	FVector2D Location; // X=0 goal line .. 1 midfield; Y=-1 left flank .. 1 right flank
 };
 
-struct Position {
-    int IndexInFormation;
-    FString Name;
-    FVector2D Location;
-    // X = 0 is the goal line, X = 1 is midfield (striker)
-    // Y = -1 is the left flank, Y = 1 is the right flank
-};
-	
-struct Formation {
-    FString Name;
-    Position Positions[11];
+struct FFormation
+{
+	FString Name;
+	FPosition Positions[11];
 };
 
-static struct Formation Formation4231 = {
-    "4-2-3-1",
-    {
-        { 0, "GK", { 0.0, 0.5 } },
-        
-        { 1, "RB", { 0.3, 1 } },
-        { 2, "RCB", { 0.2, 0.75 } },
-        { 3, "LCB", { 0.2, 0.25 } },
-        { 4, "LB", { 0.3, 0 } },
-        
-        { 5, "RDM", { 0.45, 0.75 } },
-        { 6, "LDM", { 0.55, 0.25 } },
-        
-        { 7, "RAM", { 0.8, 1 } },
-        { 8, "CAM", { 0.7, 0.6 } },
-        { 9, "LAM", { 0.8, 0 } },
-        
-        { 10, "CF", { 1, 0.4 } },
-    }
+static FFormation Formation4231 =
+{
+	TEXT("4-2-3-1"),
+	{
+		{ 0,  "GK",  { 0.0, 0.5 } },
+
+		{ 1,  "RB",  { 0.3, 1 } },
+		{ 2,  "RCB", { 0.2, 0.75 } },
+		{ 3,  "LCB", { 0.2, 0.25 } },
+		{ 4,  "LB",  { 0.3, 0 } },
+
+		{ 5,  "RDM", { 0.45, 0.75 } },
+		{ 6,  "LDM", { 0.55, 0.25 } },
+
+		{ 7,  "RAM", { 0.8, 1 } },
+		{ 8,  "CAM", { 0.7, 0.6 } },
+		{ 9,  "LAM", { 0.8, 0 } },
+
+		{ 10, "CF",  { 1, 0.4 } },
+	}
 };
 
-static struct Formation FormationDebug = {
-    "D-E-B-U-G",
-    {
-        { 0, "GK", { 0.1, 0 } },
-        
-        { 1, "RB", { 0.3, 0.8 } },
-        { 2, "RCB", { 0.3, -0.5 } },
-        { 3, "LCB", { 0.3, -0.5 } },
-        { 4, "LB", { 0.3, -0.8 } },
-        
-        { 5, "RDM", { 0.5, 0.5 } },
-        { 6, "LDM", { 0.5, -0.5 } },
-        
-        { 7, "RAM", { 0.8, 0.8 } },
-        { 8, "CAM", { 0.8, 0 } },
-        { 9, "LAM", { 0.8, -0.8 } },
-        
-        { 10, "CF", { 1, 0.4 } },
-    }
+static FFormation FormationDebug =
+{
+	TEXT("D-E-B-U-G"),
+	{
+		{ 0,  "GK",  { 0.1,  0 } },
+
+		{ 1,  "RB",  { 0.3,  0.8 } },
+		{ 2,  "RCB", { 0.3, -0.5 } },
+		{ 3,  "LCB", { 0.3, -0.5 } },
+		{ 4,  "LB",  { 0.3, -0.8 } },
+
+		{ 5,  "RDM", { 0.5,  0.5 } },
+		{ 6,  "LDM", { 0.5, -0.5 } },
+
+		{ 7,  "RAM", { 0.8,  0.8 } },
+		{ 8,  "CAM", { 0.8,  0 } },
+		{ 9,  "LAM", { 0.8, -0.8 } },
+
+		{ 10, "CF",  { 1,    0.4 } },
+	}
 };
 
 void ATeamGameState::LoadSampleState()
 {
-    static int NUM_PLAYERS = 11;
-    
-    static struct FootballerInfo homePlayers[11] = {
-        { "Szczczczczczcz" },
-        
-        { "Douche" },
-        { "BFG" },
-        { "Gabby" },
-        { "Nachos" },
-        
-        { "Cock" },
-        { "Santa Gorgonzola" },
-        
-        { "Sign Da Ting" },
-        { "Tattoo Haram" },
-        { "Wiz Khalifa - No Sleep" },
-        
-        { "Goat Cheese" }
-    };
-    
-    static struct FootballerInfo awayPlayers[11] = {
-        { "Newer" },
-        
-        { "Lame" },
-        { "Boatingle" },
-        { "Artines" },
-        { "God" },
-        
-        { "Shabby" },
-        { "Vidal Sassoon" },
-        
-        { "Robbery I" },
-        { "Giraffe" },
-        { "Robbery II" },
-        
-        { "Lrzwrzszcszczewski" }
-    };
-    
-    for (int i = 0; i < NUM_PLAYERS; i++) {
-        struct FootballerInfo homePlayer = homePlayers[i];
-        struct FootballerInfo awayPlayer = awayPlayers[i];
-        
-		AFootballer *homeFootballer = PlayerFromProperties(HomeTeam, i, homePlayer.Name);
-		homeFootballer->GetMesh()->SetMaterial(0, orangeMesh);
-        HomeTeam->Footballers.Add(homeFootballer);
-        AwayTeam->Footballers.Add(PlayerFromProperties(AwayTeam, i, awayPlayer.Name));
-    }
+	static const int32 NUM_PLAYERS = 11;
+
+	static FFootballerInfo HomePlayers[11] =
+	{
+		{ TEXT("Szczczczczczcz") },
+
+		{ TEXT("Douche") },
+		{ TEXT("BFG") },
+		{ TEXT("Gabby") },
+		{ TEXT("Nachos") },
+
+		{ TEXT("Cock") },
+		{ TEXT("Santa Gorgonzola") },
+
+		{ TEXT("Sign Da Ting") },
+		{ TEXT("Tattoo Haram") },
+		{ TEXT("Wiz Khalifa - No Sleep") },
+
+		{ TEXT("Goat Cheese") }
+	};
+
+	static FFootballerInfo AwayPlayers[11] =
+	{
+		{ TEXT("Newer") },
+
+		{ TEXT("Lame") },
+		{ TEXT("Boatingle") },
+		{ TEXT("Artines") },
+		{ TEXT("God") },
+
+		{ TEXT("Shabby") },
+		{ TEXT("Vidal Sassoon") },
+
+		{ TEXT("Robbery I") },
+		{ TEXT("Giraffe") },
+		{ TEXT("Robbery II") },
+
+		{ TEXT("Lrzwrzszcszczewski") }
+	};
+
+	for (int32 i = 0; i < NUM_PLAYERS; ++i)
+	{
+		const FFootballerInfo Home = HomePlayers[i];
+		const FFootballerInfo Away = AwayPlayers[i];
+
+		AFootballer* HomeFootballer = PlayerFromProperties(HomeTeam, i, Home.Name);
+		if (HomeFootballer && GOrangeMI)
+		{
+			if (UMeshComponent* Mesh = HomeFootballer->GetMesh())
+			{
+				Mesh->SetMaterial(0, GOrangeMI);
+			}
+		}
+
+		if (HomeTeam) { HomeTeam->Footballers.Add(HomeFootballer); }
+		if (AwayTeam) { AwayTeam->Footballers.Add(PlayerFromProperties(AwayTeam, i, Away.Name)); }
+	}
 }
 
-static float HalfFieldWidth = 2750;
-static float HalfFieldLength = 4755;
-AFootballer* ATeamGameState::PlayerFromProperties(AFootballTeam* team, int index, FString name)
-{
-    struct Position pos = FormationDebug.Positions[index];
-    
-    FVector location;
-    
-    // Position.Location.x=0 should be the goalie
-    // so for away team, that's highest positive worldX
-    // for home team, that's highest negative worldX
-    float correctLocation = 1 - pos.Location.X;
-    if (team == HomeTeam) correctLocation *= -1;
-    
-    location.X = correctLocation * HalfFieldLength * 0.9;
-    location.Y = pos.Location.Y * HalfFieldWidth * 0.9;
-    location.Z = 100;
-    
-    FTransform transform;
-    transform.SetLocation(location);
+static float HalfFieldWidth = 2750.f;
+static float HalfFieldLength = 4755.f;
 
-//    GetWorld()->GetAuthGameMode()->DefaultPawnClass;
-    AActor* actor = GetWorld()->SpawnActor(footballerClass, &transform);
-    AFootballer* footballer = Cast<AFootballer>(actor);
-    if (footballer) {
-        footballer->DisplayName = name;
-        footballer->Team = team;
-		footballer->SetActorLocation(location);
-    }
-    
-    return footballer;
+AFootballer* ATeamGameState::PlayerFromProperties(AFootballTeam* Team, int32 Index, const FString Name)
+{
+	const FPosition Pos = FormationDebug.Positions[Index];
+
+	FVector Location(0, 0, 100);
+
+	// X: 0 goalie … 1 striker; Away is +X, Home is -X.
+	float CorrectX = 1.f - Pos.Location.X;
+	if (Team == HomeTeam) { CorrectX *= -1.f; }
+
+	Location.X = CorrectX * HalfFieldLength * 0.9f;
+	Location.Y = Pos.Location.Y * HalfFieldWidth * 0.9f;
+
+	FTransform SpawnTM;
+	SpawnTM.SetLocation(Location);
+
+	AActor* Spawned = nullptr;
+	if (GFootballerBPClass)
+	{
+		Spawned = GetWorld()->SpawnActor(GFootballerBPClass, &SpawnTM);
+	}
+	else
+	{
+		// Fallback: spawn native class if BP not found
+		Spawned = GetWorld()->SpawnActor<AFootballer>(AFootballer::StaticClass(), SpawnTM);
+	}
+
+	AFootballer* Footballer = Cast<AFootballer>(Spawned);
+	if (Footballer)
+	{
+		Footballer->DisplayName = Name;
+		Footballer->Team = Team;
+		Footballer->SetActorLocation(Location);
+	}
+	return Footballer;
 }

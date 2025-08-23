@@ -1,7 +1,8 @@
+#include "Ballsack.h"
+#include "EngineUtils.h"       // TActorIterator
+
 // Fill out your copyright notice in the Description page of Project Settings.
 
-#include "Ballsack.h"          // <-- own header MUST be first
-#include "EngineUtils.h"       // TActorIterator
 
 // Sets default values
 ABallsack::ABallsack()

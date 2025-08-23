@@ -1,10 +1,11 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
+#include "Goal.h"
 #include "Ballsack.h"            // <-- MUST be FIRST
 #include "Engine/EngineTypes.h" // for FAttachmentTransformRules
 #include "OSF.h"
-#include "Goal.h"               // your own header first
 #include "Components/StaticMeshComponent.h"
+
+// Fill out your copyright notice in the Description page of Project Settings.
+
 
 
 // Sets default values
@@ -16,13 +17,13 @@ AGoal::AGoal()
     RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("SceneComponent"));
     
     this->LeftPost = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LeftPost"));
-    this->LeftPost->AttachTo(RootComponent);
+    this->LeftPost->SetupAttachment(RootComponent);
     
     this->RightPost = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RightPost"));
-    this->RightPost->AttachTo(RootComponent);
+    this->RightPost->SetupAttachment(RootComponent);
     
     this->Crossbar = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Crossbar"));
-    this->Crossbar->AttachTo(RootComponent);
+    this->Crossbar->SetupAttachment(RootComponent);
     
     static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereVisualAsset(TEXT("StaticMesh'/Game/Shapes/Shape_Cylinder'"));
     if (SphereVisualAsset.Succeeded())
@@ -87,4 +88,3 @@ bool AGoal::IsLocationInGoal(FVector BallLocation)
     }
     return false;
 }
-

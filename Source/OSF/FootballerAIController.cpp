@@ -1,8 +1,9 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
+#include "FootballerAIController.h"
 #include "Ballsack.h"            // <-- MUST be FIRST
 #include "OSF.h"
-#include "FootballerAIController.h"
+
+// Fill out your copyright notice in the Description page of Project Settings.
+
 
 void AFootballerAIController::BeginPlay()
 {
