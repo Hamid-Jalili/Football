@@ -11,7 +11,7 @@
 #include "Net/UnrealNetwork.h"
 
 // ----------------------------------------------------------------------------
-// Sample attribute presets (unchanged)
+// Sample attribute presets
 // ----------------------------------------------------------------------------
 
 AFootballer::FootballAttributeInfo FA_Sample_Walcott() {
@@ -40,6 +40,25 @@ AFootballer::AFootballer()
 {
     PrimaryActorTick.bCanEverTick = true;
     FootballAttributes = FA_Sample_Walcott();
+
+    // Initialize gameplay state
+    PendingAction.Type = PendingActionType::FootballerActionNone;
+    PendingAction.Power = 0.f;
+    PendingAction.Direction = FVector::ZeroVector;
+
+    DesiredMovement = FVector::ZeroVector;
+    DesiredSprintStrength = 0.f;
+
+    GoingForPossession = false;
+    WaitingForPass = false;
+    ThinksHasPossession = false;
+    JustKickedBall = false;
+    LastKickTime = 0.f;
+
+    FootballerController = nullptr;
+    AIController = nullptr;
+    Team = nullptr;
+    Ball = nullptr;
 }
 
 void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
@@ -72,15 +91,23 @@ void AFootballer::BeginPlay()
     Ball = ABallsack::GetWorldBall(GetWorld());
     verify(Ball != nullptr);
 
-    if (TargetingIndicator)       TargetingIndicator->SetVisibility(false);
+    if (TargetingIndicator) TargetingIndicator->SetVisibility(false);
     if (!ControlledByPlayer && PlayerControlIndicator)
         PlayerControlIndicator->SetVisibility(false);
 
     if (UCharacterMovementComponent* Move = GetCharacterMovement())
     {
-        // Faster so the pawn doesn't feel sluggish (cm/s).
-        Move->MaxWalkSpeed = FootballAttributes.SprintSpeed * 25.f;
+        Move->MaxWalkSpeed = FootballAttributes.SprintSpeed * 10.f;
     }
+
+    // Prevent immediate kick after spawn
+    LastKickTime = GetWorld()->GetTimeSeconds();
+}
+
+// Cooldown helper
+static bool CanTouchNow(const UWorld* World, float LastKickTime, float CooldownSeconds = 0.35f)
+{
+    return World && (World->GetTimeSeconds() - LastKickTime) > CooldownSeconds;
 }
 
 void AFootballer::Tick(float DeltaTime)
@@ -89,10 +116,9 @@ void AFootballer::Tick(float DeltaTime)
 
     if (!DoneInitialSetup && HasAuthority())
     {
-        // Keep for future AI possession re-enable if needed.
+        // Placeholder for future AI logic
     }
 
-    // Reset JustKickedBall once we're far enough from the ball
     if (JustKickedBall && !CanKickBall())
     {
         JustKickedBall = false;
@@ -105,7 +131,7 @@ void AFootballer::Tick(float DeltaTime)
 
     if (ControlledByPlayer)
     {
-        if (CanKickBall())
+        if (CanKickBall() && CanTouchNow(GetWorld(), LastKickTime))
         {
             GoingForPossession = true;
             ThinksHasPossession = true;
@@ -117,19 +143,33 @@ void AFootballer::Tick(float DeltaTime)
                 case PendingActionType::FootballerActionShot:
                     ShootBall(PendingAction.Power, PendingAction.Direction);
                     JustKickedBall = true;
+                    LastKickTime = GetWorld()->GetTimeSeconds();
                     break;
                 case PendingActionType::FootballerActionPass:
                     PassBall(PendingAction.Power, PendingAction.Direction);
                     JustKickedBall = true;
+                    LastKickTime = GetWorld()->GetTimeSeconds();
                     break;
                 default: break;
                 }
             }
             else
             {
-                // default touch/dribble
-                KnockBallOn(DeltaTime, 5.f + 5.f * DesiredSprintStrength);
-                JustKickedBall = true;
+                // Only dribble if input exists and toward ball
+                const FVector MoveDir = DesiredMovement.GetSafeNormal2D();
+                FVector ToBall = Ball ? (Ball->GetActorLocation() - GetActorLocation()) : FVector::ZeroVector;
+                ToBall.Z = 0.f;
+                const FVector ToBallDir = ToBall.GetSafeNormal();
+
+                const bool bHasInput = DesiredMovement.SizeSquared2D() > 0.05f;
+                const bool bFacingBall = FVector::DotProduct(MoveDir, ToBallDir) > 0.2f;
+
+                if (bHasInput && bFacingBall)
+                {
+                    KnockBallOn(DeltaTime, 5.f + 5.f * DesiredSprintStrength);
+                    JustKickedBall = true;
+                    LastKickTime = GetWorld()->GetTimeSeconds();
+                }
             }
 
             ClearPendingAction();
@@ -154,34 +194,29 @@ void AFootballer::Tick(float DeltaTime)
     }
     else
     {
-        // AI tick placeholder
+        // TODO: AI tick
     }
 }
 
-// Avoid C4458: don't shadow AActor::InputComponent
+// ---------------- Input ----------------
+
 void AFootballer::SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent)
 {
     Super::SetupPlayerInputComponent(PlayerInputComponent);
-    // Bind inputs here if/when you add them
 }
 
-// ----------------------------------------------------------------------------
-// Indicators
-// ----------------------------------------------------------------------------
+// ---------------- Indicators ----------------
 
 void AFootballer::ShowTargetingIndicator()
 {
     if (TargetingIndicator) TargetingIndicator->SetVisibility(true);
 }
-
 void AFootballer::HideTargetingIndicator()
 {
     if (TargetingIndicator) TargetingIndicator->SetVisibility(false);
 }
 
-// ----------------------------------------------------------------------------
-// Control (RPCs)
-// ----------------------------------------------------------------------------
+// ---------------- Control ----------------
 
 void AFootballer::Server_GainPlayerControl_Implementation(AFootballerController* NewController)
 {
@@ -206,15 +241,12 @@ void AFootballer::OnRep_ControlledByPlayer()
         PlayerControlIndicator->SetVisibility(ControlledByPlayer);
     }
 }
-
 bool AFootballer::IsControlledByPlayer()
 {
     return ControlledByPlayer;
 }
 
-// ----------------------------------------------------------------------------
-// Pending actions
-// ----------------------------------------------------------------------------
+// ---------------- Pending Actions ----------------
 
 void AFootballer::ClearPendingAction()
 {
@@ -222,14 +254,12 @@ void AFootballer::ClearPendingAction()
     PendingAction.Power = 0.f;
     PendingAction.Direction = FVector::ZeroVector;
 }
-
 void AFootballer::SetPendingShot(float Power, FVector DesiredDirection)
 {
     PendingAction.Type = PendingActionType::FootballerActionShot;
     PendingAction.Power = Power;
     PendingAction.Direction = DesiredDirection;
 }
-
 void AFootballer::SetPendingPass(float Power, FVector DesiredDirection)
 {
     PendingAction.Type = PendingActionType::FootballerActionPass;
@@ -237,17 +267,14 @@ void AFootballer::SetPendingPass(float Power, FVector DesiredDirection)
     PendingAction.Direction = DesiredDirection;
 }
 
-// ----------------------------------------------------------------------------
-// Helpers & state
-// ----------------------------------------------------------------------------
+// ---------------- Helpers ----------------
 
 FVector AFootballer::DesiredMovementOrForwardVector()
 {
     return (DesiredMovement.Size() <= FLT_EPSILON) ? GetActorForwardVector() : DesiredMovement;
 }
 
-static constexpr float MIN_DISTANCE_FOR_TOUCH = 100.f;
-
+static float MIN_DISTANCE_FOR_TOUCH = 100.f;
 bool AFootballer::CanKickBall()
 {
     if (!Ball) return false;
@@ -256,32 +283,38 @@ bool AFootballer::CanKickBall()
     return Distance.Size() < MIN_DISTANCE_FOR_TOUCH;
 }
 
-// ----------------------------------------------------------------------------
-// Dribbling
-// ----------------------------------------------------------------------------
+// ---------------- Dribbling ----------------
 
 void AFootballer::KnockBallOn_Implementation(float /*DeltaSeconds*/, float Strength)
 {
     if (!Ball) return;
+    if (DesiredMovement.SizeSquared2D() < 0.05f) return;
 
-    const FVector BallVelocity = Ball->GetVelocity();
+    FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
+    ToBall.Z = 0.f;
+    const FVector ToBallDir = ToBall.GetSafeNormal();
+    const FVector MoveDir = DesiredMovement.GetSafeNormal2D();
+    if (FVector::DotProduct(MoveDir, ToBallDir) < 0.2f) return;
 
-    FVector Direction = DesiredMovement;
-    Direction.Normalize();
+    const FVector BallVel = Ball->GetVelocity();
+    const FVector DesiredVel = MoveDir * Strength * 100.f;
 
-    const FVector DesiredVelocity = Direction * Strength * 100.f;
-    const FVector NeededVelChange = DesiredVelocity - BallVelocity;
+    FVector Needed = DesiredVel - BallVel;
+
+    const float MaxImpulse = 800.f;
+    if (Needed.Size() > MaxImpulse)
+    {
+        Needed *= (MaxImpulse / Needed.Size());
+    }
 
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
-        SM->AddImpulse(NeededVelChange, NAME_None, true);
+        SM->AddImpulse(Needed, NAME_None, true);
     }
 }
-bool AFootballer::KnockBallOn_Validate(float /*DeltaSeconds*/, float /*Strength*/) { return true; }
+bool AFootballer::KnockBallOn_Validate(float, float) { return true; }
 
-// ----------------------------------------------------------------------------
-// Shooting
-// ----------------------------------------------------------------------------
+// ---------------- Shooting ----------------
 
 static const float MAX_POWER = 1.0f;
 static const float MIN_POWER = 0.5f;
@@ -289,12 +322,7 @@ static const float MIN_POWER = 0.5f;
 void AFootballer::ShootBall_Implementation(float Power, FVector DesiredDirection)
 {
     if (!Ball) return;
-
-    if (!CanKickBall())
-    {
-        SetPendingShot(Power, DesiredDirection);
-        return;
-    }
+    if (!CanKickBall()) { SetPendingShot(Power, DesiredDirection); return; }
 
     float MinDistance = FLT_MAX;
     AGoal* CloserGoal = nullptr;
@@ -302,59 +330,41 @@ void AFootballer::ShootBall_Implementation(float Power, FVector DesiredDirection
     {
         AGoal* Goal = *It;
         const float Dist = GetDistanceTo(Goal);
-        if (Dist < MinDistance)
-        {
-            MinDistance = Dist;
-            CloserGoal = Goal;
-        }
+        if (Dist < MinDistance) { MinDistance = Dist; CloserGoal = Goal; }
     }
     if (!CloserGoal) return;
 
     FVector LeftDir = CloserGoal->LeftPost->GetComponentLocation() - Ball->GetActorLocation();
     FVector RightDir = CloserGoal->RightPost->GetComponentLocation() - Ball->GetActorLocation();
-    LeftDir.Normalize();
-    RightDir.Normalize();
+    LeftDir.Normalize(); RightDir.Normalize();
 
     FVector Target;
     if (FMath::Acos(LeftDir | DesiredDirection) < FMath::Acos(RightDir | DesiredDirection))
     {
-        Target = CloserGoal->LeftPost->GetComponentLocation();
-        Target.Y += 100.f;
-        Target.Z = 100.f;
+        Target = CloserGoal->LeftPost->GetComponentLocation(); Target.Y += 100.f; Target.Z = 100.f;
     }
-    else
-    {
-        Target = CloserGoal->RightPost->GetComponentLocation();
-        Target.Y -= 100.f;
-        Target.Z = 100.f;
-    }
+    else { Target = CloserGoal->RightPost->GetComponentLocation(); Target.Y -= 100.f; Target.Z = 100.f; }
 
     DesiredDirection = Target - GetActorLocation();
-    DesiredDirection.Z = 0.f;
-    DesiredDirection.Normalize();
+    DesiredDirection.Z = 0.f; DesiredDirection.Normalize();
 
     Power = FMath::Clamp(Power, MIN_POWER, MAX_POWER);
-    const float XY = 5000.f * Power;
-    const float Z = 700.f * Power;
-
-    DesiredDirection.X *= XY;
-    DesiredDirection.Y *= XY;
-    DesiredDirection.Z = Z;
+    FVector Impulse = DesiredDirection * (5000.f * Power);
+    Impulse.Z = 700.f * Power;
 
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
-        SM->AddImpulse(DesiredDirection, NAME_None, true);
+        SM->AddImpulse(Impulse, NAME_None, true);
     }
 
     ThinksHasPossession = false;
     GoingForPossession = true;
     JustKickedBall = true;
+    LastKickTime = GetWorld()->GetTimeSeconds();
 }
-bool AFootballer::ShootBall_Validate(float /*a*/, FVector /*b*/) { return true; }
+bool AFootballer::ShootBall_Validate(float, FVector) { return true; }
 
-// ----------------------------------------------------------------------------
-// Passing
-// ----------------------------------------------------------------------------
+// ---------------- Passing ----------------
 
 TArray<AFootballer*> AFootballer::Teammates()
 {
@@ -366,10 +376,7 @@ TArray<AFootballer*> AFootballer::Teammates()
     for (TActorIterator<AFootballer> It(GetWorld()); It; ++It)
     {
         AFootballer* F = *It;
-        if (F && F != this && F->Team == Team)
-        {
-            Result.Add(F);
-        }
+        if (F && F != this && F->Team == Team) { Result.Add(F); }
     }
 
     CachedTeammates = Result;
@@ -387,19 +394,12 @@ AFootballer* AFootballer::FindPassTarget(float Power, FVector DesiredDirection)
     for (AFootballer* Other : Mates)
     {
         if (!Other) continue;
-
         const FVector ToOther = Other->GetActorLocation() - GetActorLocation();
-        const float   AngleToOther = FMath::Atan2(ToOther.Y, ToOther.X);
-
+        const float AngleToOther = FMath::Atan2(ToOther.Y, ToOther.X);
         const float Angular = FMath::Abs(DesiredAngle - AngleToOther);
         const float Linear = ToOther.Size();
-
         const float Score = Angular * 800.f + Linear * (1.f - Power);
-        if (Score < BestScore && Other != this)
-        {
-            BestScore = Score;
-            Closest = Other;
-        }
+        if (Score < BestScore) { BestScore = Score; Closest = Other; }
     }
     return Closest;
 }
@@ -407,31 +407,21 @@ AFootballer* AFootballer::FindPassTarget(float Power, FVector DesiredDirection)
 void AFootballer::PassBall_Implementation(float Power, FVector DesiredDirection)
 {
     if (!Ball) return;
-
-    if (!CanKickBall())
-    {
-        SetPendingPass(Power, DesiredDirection);
-        return;
-    }
+    if (!CanKickBall()) { SetPendingPass(Power, DesiredDirection); return; }
 
     Power = FMath::Clamp(Power, MIN_POWER, MAX_POWER);
-
     AFootballer* Receiver = FindPassTarget(Power, DesiredDirection);
     if (!Receiver) return;
 
     FVector Pass = Receiver->GetActorLocation() - Ball->GetActorLocation();
     Pass.Z = 0.f;
-
     const float Size = Pass.Size();
-    const float MIN_PASS_LENGTH = 500.f;   // 5m
-    const float MAX_PASS_LENGTH = 3000.f;  // 30m
-    const float Clamped = FMath::Clamp(Size, MIN_PASS_LENGTH, MAX_PASS_LENGTH);
+    const float MIN_PASS_LENGTH = 500.f;
+    const float MAX_PASS_LENGTH = 3000.f;
+    Pass *= FMath::Clamp(Size, MIN_PASS_LENGTH, MAX_PASS_LENGTH) / Size;
+    Pass *= 1.5f;
 
-    Pass *= (Clamped / Size);
-    Pass *= 1.5f; // general boost
-
-    const FVector BallVel = Ball->GetVelocity();
-    const FVector Needed = Pass - BallVel;
+    FVector Needed = Pass - Ball->GetVelocity();
 
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
@@ -441,93 +431,56 @@ void AFootballer::PassBall_Implementation(float Power, FVector DesiredDirection)
     ThinksHasPossession = false;
     GoingForPossession = false;
     JustKickedBall = true;
+    LastKickTime = GetWorld()->GetTimeSeconds();
 
-    if (FootballerController)
-    {
-        FootballerController->SwitchToFootballer(Receiver);
-    }
-
-    Receiver->GoingForPossession = false; // after controller switch
+    if (FootballerController) { FootballerController->SwitchToFootballer(Receiver); }
+    Receiver->GoingForPossession = false;
     Receiver->WaitingForPass = true;
 }
-bool AFootballer::PassBall_Validate(float /*Power*/, FVector /*Direction*/) { return true; }
+bool AFootballer::PassBall_Validate(float, FVector) { return true; }
 
-// ----------------------------------------------------------------------------
-// Movement
-// ----------------------------------------------------------------------------
+// ---------------- Movement ----------------
 
-void AFootballer::MoveToBallForKick(FVector /*DesiredEndDirection*/, float /*DeltaSeconds*/)
+void AFootballer::MoveToBallForKick(FVector, float)
 {
     if (!Ball) return;
-
     const FVector CharPos = GetActorLocation();
     const FVector TargetPos = Ball->GetActorLocation();
-
-    FVector ToTarget = TargetPos - CharPos;
-    ToTarget.Z = 0.f;
-
-    const float Distance = ToTarget.Size();
-    const float MaxSpeed = (GetMovementComponent() && GetMovementComponent()->GetMaxSpeed() > 0.f)
-        ? GetMovementComponent()->GetMaxSpeed()
-        : 600.f;
-
-    const float Time = (MaxSpeed > 0.f) ? Distance / MaxSpeed : 0.f;
-    const FVector Predicted = TargetPos + Ball->GetVelocity() * Time;
-
-    FVector DesiredPos = Predicted; DesiredPos.Z = CharPos.Z;
-
-    FVector MoveDir = DesiredPos - CharPos; MoveDir.Z = 0.f;
-    if (!MoveDir.IsNearlyZero()) { MoveDir.Normalize(); }
-
-    AddMovementInput(MoveDir, 1.f);
+    FVector ToTarget = TargetPos - CharPos; ToTarget.Z = 0.f;
+    float Distance = ToTarget.Size();
+    float MaxSpeed = GetMovementComponent() ? GetMovementComponent()->GetMaxSpeed() : 600.f;
+    float Time = (MaxSpeed > 0.f) ? Distance / MaxSpeed : 0.f;
+    FVector Predicted = TargetPos + Ball->GetVelocity() * Time;
+    FVector MoveDir = (Predicted - CharPos); MoveDir.Z = 0.f;
+    if (MoveDir.Size() > 1.f) MoveDir.Normalize();
+    AddMovementInput(MoveDir);
 }
 
-void AFootballer::MoveToBallForPass(FVector DesiredMove, float /*DeltaSeconds*/)
+void AFootballer::MoveToBallForPass(FVector DesiredMove, float)
 {
     if (!Ball) return;
-
-    const float DesiredAngle = FMath::Atan2(DesiredMove.Y, DesiredMove.X);
+    float DesiredAngle = FMath::Atan2(DesiredMove.Y, DesiredMove.X);
     FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
     ToBall.Z = 0.f;
-
-    const float AngleToBall = FMath::Atan2(ToBall.Y, ToBall.X);
-
-    // Trap if close enough
-    if (const float Dist = ToBall.Size(); Dist > FLT_EPSILON && Dist < 50.f)
+    float AngleToBall = FMath::Atan2(ToBall.Y, ToBall.X);
+    if (ToBall.Size() > FLT_EPSILON && ToBall.Size() < 50.f)
     {
-        if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
-        {
-            SM->SetPhysicsLinearVelocity(FVector::ZeroVector);
-        }
+        if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent()) { SM->SetPhysicsLinearVelocity(FVector::ZeroVector); }
     }
-
-    if (DesiredMove.Size() > FLT_EPSILON && FMath::Abs(AngleToBall - DesiredAngle) < PI * 0.75f)
-    {
-        ToBall.Normalize();
-        AddMovementInput(ToBall, 1.f);
-    }
-    else
-    {
-        ToBall.Normalize();
-        AddMovementInput(ToBall, 1.f / 3.f);
-    }
+    ToBall.Normalize();
+    if (DesiredMove.Size() > FLT_EPSILON && FMath::Abs(AngleToBall - DesiredAngle) < PI * 0.75f) AddMovementInput(ToBall);
+    else AddMovementInput(ToBall / 3.f);
 }
 
 void AFootballer::FreeMoveDesired()
 {
-    FVector Dir = DesiredMovement; float Mag = Dir.Size();
-    if (Mag > KINDA_SMALL_NUMBER)
-    {
-        Dir /= Mag; // normalize
-        const float Scale = FMath::Clamp(Mag, 0.f, 1.f) * (0.5f + 0.5f * DesiredSprintStrength);
-        AddMovementInput(Dir, Scale);
-    }
+    FVector Move = DesiredMovement * (0.5f + 0.5f * DesiredSprintStrength);
+    AddMovementInput(Move);
 }
 
-// Keep signature (int sprintStrength) to avoid header churn
 static FVector calculateValidMovement(FVector Movement, int SprintStrength)
 {
-    if (!Movement.IsNearlyZero()) Movement.Normalize();
+    Movement.Normalize();
     hope(SprintStrength <= 1);
     return Movement * (0.5f + 0.5f * SprintStrength);
 }
@@ -536,7 +489,7 @@ void AFootballer::Server_SetDesiredMovement_Implementation(FVector Movement)
 {
     DesiredMovement = calculateValidMovement(Movement, DesiredSprintStrength);
 }
-bool AFootballer::Server_SetDesiredMovement_Validate(FVector /*Movement*/) { return true; }
+bool AFootballer::Server_SetDesiredMovement_Validate(FVector) { return true; }
 
 void AFootballer::SetDesiredMovement(FVector Movement)
 {
@@ -548,10 +501,10 @@ void AFootballer::SetDesiredSprintStrength_Implementation(const float Strength)
 {
     DesiredSprintStrength = simpleclamp(Strength, 0.f, 1.f);
 }
-bool AFootballer::SetDesiredSprintStrength_Validate(float /*Strength*/) { return true; }
+bool AFootballer::SetDesiredSprintStrength_Validate(float) { return true; }
 
 void AFootballer::SetGoingForPossession_Implementation(bool bGoing)
 {
     GoingForPossession = bGoing;
 }
-bool AFootballer::SetGoingForPossession_Validate(bool /*bGoing*/) { return true; }
+bool AFootballer::SetGoingForPossession_Validate(bool) { return true; }

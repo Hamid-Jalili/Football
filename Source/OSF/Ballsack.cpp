@@ -1,13 +1,10 @@
 #include "Ballsack.h"
-#include "EngineUtils.h"       // TActorIterator
-
-// Fill out your copyright notice in the Description page of Project Settings.
-
+#include "EngineUtils.h"                    // TActorIterator
+#include "Components/StaticMeshComponent.h" // UStaticMeshComponent
 
 // Sets default values
 ABallsack::ABallsack()
 {
-	// Set this actor to call Tick() every frame. Turn off if not needed for perf.
 	PrimaryActorTick.bCanEverTick = true;
 }
 
@@ -15,6 +12,31 @@ ABallsack::ABallsack()
 void ABallsack::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Ensure the ball has proper physics/collision settings
+	if (UStaticMeshComponent* SM = GetStaticMeshComponent())
+	{
+		// Physics
+		SM->SetSimulatePhysics(true);
+		SM->SetEnableGravity(true);
+
+		// Collision
+		SM->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		SM->SetCollisionObjectType(ECC_PhysicsBody);
+		SM->SetCollisionResponseToAllChannels(ECR_Block);
+		SM->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);   // block players
+		SM->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+
+		// Continuous Collision Detection to reduce tunneling through players/feet
+		SM->BodyInstance.bUseCCD = true;
+
+		// Light damping to smooth jitter but keep ball lively
+		SM->SetLinearDamping(0.2f);
+		SM->SetAngularDamping(0.2f);
+
+		// Optional: clamp max angular velocity a bit (helps stability)
+		SM->BodyInstance.MaxAngularVelocity = 400.f;
+	}
 }
 
 // Called every frame
