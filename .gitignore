@@ -1,0 +1,68 @@
+# Visual Studio
+.vs/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.vsconfig
+
+# Build Artifacts
+Binaries/*
+Build/*
+Intermediate/*
+Plugins/**/Binaries/*
+Plugins/**/Intermediate/*
+
+# Whitelist PakBlacklist-<BuildConfiguration>.txt files
+!Build/*/
+Build/*/**
+!Build/*/PakBlacklist*.txt
+
+# Don't ignore icon files in Build
+!Build/**/*.ico
+
+# Compiled Files
+*.o
+*.obj
+*.lo
+*.slo
+*.gch
+*.pch
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.ipa
+
+# Libraries
+*.a
+*.lib
+*.lai
+*.la
+*.mod
+
+# IDE Project Files
+*.xcodeproj
+*.xcworkspace
+
+# Cached / Generated Data
+Saved/*
+DerivedDataCache/*
+
+# Asset Exclusions
+*_BuiltData.uasset
+SourceArt/**/*.png
+SourceArt/**/*.tga
+
+# MetaHumans (Large)
+Content/MetaHumans/
+Content/MetaHumans/**
+Content/Textures/
+Intermediate/
+
+# Whisper Model (Large File)
+Content/Whisper/Models/ggml-base.en.bin
