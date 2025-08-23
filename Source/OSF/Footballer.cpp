@@ -1,4 +1,4 @@
-#include "Footballer.h"
+Ôªø#include "Footballer.h"
 #include "OSF.h"
 #include "FootballerController.h"
 #include "FootballerAIController.h"
@@ -9,17 +9,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Net/UnrealNetwork.h"
-
-// ----------------------------------------------------------------------------
-// Tuning constants (knock/shot/pass safety & feel)
-// ----------------------------------------------------------------------------
-static constexpr float TOUCH_MIN_DIST_CM = 75.f;    // start of touch band
-static constexpr float TOUCH_MAX_DIST_CM = 120.f;   // end of touch band
-static constexpr float TOUCH_COOLDOWN_S = 0.35f;   // min time between impulses
-static constexpr float INPUT_THRESHOLD2D = 0.05f;   // minimum input magnitude^2
-static constexpr float ANGLE_DOT_MIN = 0.25f;   // must push roughly toward ball
-static constexpr float MAX_BALL_SPEED_CM_S = 1800.f;  // hard cap ~18 m/s
-static constexpr float MAX_KNOCK_IMPULSE = 600.f;   // safety impulse limit
 
 // ----------------------------------------------------------------------------
 // Sample attribute presets
@@ -42,6 +31,14 @@ AFootballer::FootballAttributeInfo FA_Sample_Arteta() {
     attrs.SprintSpeed = 40;
     return attrs;
 }
+
+// ----------------------------------------------------------------------------
+// Tunables
+// ----------------------------------------------------------------------------
+static float MIN_DISTANCE_FOR_TOUCH = 120.f;   // possession radius
+static float LOSE_POSSESSION_DISTANCE = 180.f;   // drop possession if > this
+static float TOUCH_COOLDOWN = 0.30f;   // seconds between ‚Äútouches‚Äù
+static float MAX_DRIBBLE_IMPULSE = 160.f;   // gentle carry cap
 
 // ----------------------------------------------------------------------------
 // AFootballer
@@ -70,6 +67,8 @@ AFootballer::AFootballer()
     AIController = nullptr;
     Team = nullptr;
     Ball = nullptr;
+
+    bHasPossession = false;
 }
 
 void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
@@ -93,6 +92,7 @@ void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLif
     DOREPLIFETIME(AFootballer, ControlledByPlayer);
     DOREPLIFETIME(AFootballer, CachedTeammates);
     DOREPLIFETIME(AFootballer, DoneInitialSetup);
+    DOREPLIFETIME(AFootballer, bHasPossession);
 }
 
 void AFootballer::BeginPlay()
@@ -111,29 +111,50 @@ void AFootballer::BeginPlay()
         Move->MaxWalkSpeed = FootballAttributes.SprintSpeed * 10.f;
     }
 
-    // Grace period to avoid instant touch on spawn
+    // Prevent first-tick auto touch
     LastKickTime = GetWorld()->GetTimeSeconds();
+    bHasPossession = false;
+    JustKickedBall = false;
 }
 
-// Small helper: rate-limit ball touches
-static bool CanTouchNow(const UWorld* World, float LastKickTime)
+bool AFootballer::HasMeaningfulInput() const
 {
-    return World && (World->GetTimeSeconds() - LastKickTime) > TOUCH_COOLDOWN_S;
+    return DesiredMovement.SizeSquared2D() > 0.05f;
 }
 
 void AFootballer::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    if (!DoneInitialSetup && HasAuthority())
-    {
-        // Placeholder for future AI possession logic
-    }
-
-    // Reset JustKickedBall once we're far enough from the ball
+    // Reset spam gate when far from ball
     if (JustKickedBall && !CanKickBall())
     {
         JustKickedBall = false;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    const bool bTouchReady = (Now - LastKickTime) > TOUCH_COOLDOWN;
+
+    // Maintain possession
+    if (CanKickBall() && bTouchReady)
+    {
+        bHasPossession = true;
+    }
+    else
+    {
+        if (Ball)
+        {
+            FVector D = GetActorLocation() - Ball->GetActorLocation();
+            D.Z = 0.f;
+            if (D.Size() > LOSE_POSSESSION_DISTANCE)
+            {
+                bHasPossession = false;
+            }
+        }
+        else
+        {
+            bHasPossession = false;
+        }
     }
 
     if (PlayerControlIndicator)
@@ -143,71 +164,47 @@ void AFootballer::Tick(float DeltaTime)
 
     if (ControlledByPlayer)
     {
-        if (CanKickBall())
+        if (bHasPossession && HasMeaningfulInput())
         {
-            GoingForPossession = true;
-            ThinksHasPossession = true;
-
-            if (PendingAction.Type != PendingActionType::FootballerActionNone)
+            // Execute queued actions explicitly; otherwise dribble
+            if (PendingAction.Type == PendingActionType::FootballerActionShot)
             {
-                switch (PendingAction.Type)
-                {
-                case PendingActionType::FootballerActionShot:
-                    if (CanTouchNow(GetWorld(), LastKickTime))
-                    {
-                        ShootBall(PendingAction.Power, PendingAction.Direction);
-                        JustKickedBall = true;
-                        LastKickTime = GetWorld()->GetTimeSeconds();
-                    }
-                    break;
-                case PendingActionType::FootballerActionPass:
-                    if (CanTouchNow(GetWorld(), LastKickTime))
-                    {
-                        PassBall(PendingAction.Power, PendingAction.Direction);
-                        JustKickedBall = true;
-                        LastKickTime = GetWorld()->GetTimeSeconds();
-                    }
-                    break;
-                default: break;
-                }
+                ShootBall(PendingAction.Power, PendingAction.Direction);
+                JustKickedBall = true;
+                LastKickTime = Now;
+                ClearPendingAction();
+            }
+            else if (PendingAction.Type == PendingActionType::FootballerActionPass)
+            {
+                PassBall(PendingAction.Power, PendingAction.Direction);
+                JustKickedBall = true;
+                LastKickTime = Now;
+                ClearPendingAction();
             }
             else
             {
-                // Default controlled touch/dribble only with real input, roughly toward ball
-                const FVector MoveDir = DesiredMovement.GetSafeNormal2D();
-                FVector ToBall = (Ball ? (Ball->GetActorLocation() - GetActorLocation()) : FVector::ZeroVector);
-                ToBall.Z = 0.f;
-                const FVector ToBallDir = ToBall.GetSafeNormal();
-
-                const bool bHasInput = DesiredMovement.SizeSquared2D() > INPUT_THRESHOLD2D;
-                const bool bTowardBall = FVector::DotProduct(MoveDir, ToBallDir) > ANGLE_DOT_MIN;
-
-                if (bHasInput && bTowardBall && CanTouchNow(GetWorld(), LastKickTime))
-                {
-                    KnockBallOn(DeltaTime, 5.f + 5.f * DesiredSprintStrength);
-                    JustKickedBall = true;
-                    LastKickTime = GetWorld()->GetTimeSeconds();
-                }
+                DribbleBall(DeltaTime);   // gentle keep-in-front; no blasts
             }
 
-            ClearPendingAction();
+            GoingForPossession = true;
+            ThinksHasPossession = true;
         }
         else
         {
             ThinksHasPossession = false;
-        }
 
-        if (GoingForPossession)
-        {
-            MoveToBallForKick(DesiredMovement, DeltaTime);
-        }
-        else if (WaitingForPass)
-        {
-            MoveToBallForPass(DesiredMovement, DeltaTime);
-        }
-        else
-        {
-            FreeMoveDesired();
+            if (GoingForPossession)
+            {
+                MoveToBallForKick(DesiredMovement, DeltaTime);
+            }
+            else if (WaitingForPass)
+            {
+                MoveToBallForPass(DesiredMovement, DeltaTime);
+            }
+            else
+            {
+                FreeMoveDesired();
+            }
         }
     }
     else
@@ -220,7 +217,7 @@ void AFootballer::Tick(float DeltaTime)
 void AFootballer::SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent)
 {
     Super::SetupPlayerInputComponent(PlayerInputComponent);
-    // Bind inputs here if/when you add them
+    // bind inputs here if/when you add them
 }
 
 // ----------------------------------------------------------------------------
@@ -309,60 +306,80 @@ bool AFootballer::CanKickBall()
     if (!Ball) return false;
     FVector Distance = GetActorLocation() - Ball->GetActorLocation();
     Distance.Z = 0.f;
-    const float Dist = Distance.Size();
-    // Touch band avoids impulses while overlapping at 0 cm
-    return (Dist >= TOUCH_MIN_DIST_CM && Dist <= TOUCH_MAX_DIST_CM);
+    return Distance.Size() < MIN_DISTANCE_FOR_TOUCH;
 }
 
 // ----------------------------------------------------------------------------
-// Dribbling
+// Dribbling (gentle keep-in-front)
 // ----------------------------------------------------------------------------
 
-void AFootballer::KnockBallOn_Implementation(float /*DeltaSeconds*/, float Strength)
+void AFootballer::DribbleBall_Implementation(float DeltaSeconds)
 {
     if (!Ball) return;
 
-    // Require meaningful input & roughly toward the ball
-    if (DesiredMovement.SizeSquared2D() < INPUT_THRESHOLD2D) return;
+    // Keep ball a bit in front of the feet
+    FVector Fwd = GetActorForwardVector(); Fwd.Z = 0.f; Fwd.Normalize();
+    const FVector DesiredBallPos = GetActorLocation() + Fwd * 80.f;
+
+    FVector ToTarget = DesiredBallPos - Ball->GetActorLocation();
+    ToTarget.Z = 0.f;
+
+    // If ball already too fast, damp it a little
+    const FVector Vel = Ball->GetVelocity();
+    if (Vel.Size() > 1200.f)
+    {
+        if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
+        {
+            SM->SetPhysicsLinearVelocity(Vel * 0.65f);
+        }
+    }
+
+    // Only nudge if off-line/behind
+    if (ToTarget.Size() > 30.f)
+    {
+        FVector Impulse = ToTarget * 5.f;
+        Impulse = Impulse.GetClampedToMaxSize(MAX_DRIBBLE_IMPULSE);
+        Impulse *= (0.6f + 0.6f * FMath::Clamp(DesiredSprintStrength, 0.f, 1.f));
+
+        if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
+        {
+            SM->AddImpulse(Impulse, NAME_None, true);
+        }
+    }
+}
+
+// Keep legacy KnockBallOn for explicit use (not called automatically)
+void AFootballer::KnockBallOn_Implementation(float /*deltaSeconds*/, float Strength)
+{
+    if (!Ball) return;
+
+    // Require meaningful input and roughly facing the ball
+    if (DesiredMovement.SizeSquared2D() < 0.05f) return;
+
     FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
     ToBall.Z = 0.f;
     const FVector ToBallDir = ToBall.GetSafeNormal();
     const FVector MoveDir = DesiredMovement.GetSafeNormal2D();
-    if (FVector::DotProduct(MoveDir, ToBallDir) < ANGLE_DOT_MIN) return;
+    if (FVector::DotProduct(MoveDir, ToBallDir) < 0.2f) return;
 
-    if (!CanTouchNow(GetWorld(), LastKickTime)) return;
-
-    // Current ball speed
     const FVector BallVel = Ball->GetVelocity();
-    const float BallSpeed = BallVel.Size2D();
-    if (BallSpeed >= MAX_BALL_SPEED_CM_S) return;
+    const FVector DesiredVel = MoveDir * Strength * 100.f;
 
-    // Target ground speed for a controlled knock
-    const float TargetSpeed = FMath::Min(MAX_BALL_SPEED_CM_S, (Strength * 100.f));
-    const FVector DesiredVel = MoveDir * TargetSpeed;
     FVector Needed = DesiredVel - BallVel;
 
-    // Safety clamp to avoid ìrocketî first touches
-    const float NeedSize = Needed.Size();
-    if (NeedSize > MAX_KNOCK_IMPULSE)
+    const float MaxImpulse = 800.f;
+    const float NeededSize = Needed.Size();
+    if (NeededSize > MaxImpulse)
     {
-        Needed *= (MAX_KNOCK_IMPULSE / NeedSize);
+        Needed *= (MaxImpulse / NeededSize);
     }
 
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
         SM->AddImpulse(Needed, NAME_None, true);
-        // Clamp resulting linear velocity
-        FVector V = SM->GetPhysicsLinearVelocity();
-        const float S = V.Size2D();
-        if (S > MAX_BALL_SPEED_CM_S)
-        {
-            const FVector Capped = V.GetSafeNormal2D() * MAX_BALL_SPEED_CM_S;
-            SM->SetPhysicsLinearVelocity(FVector(Capped.X, Capped.Y, V.Z), false);
-        }
     }
 }
-bool AFootballer::KnockBallOn_Validate(float /*DeltaSeconds*/, float /*Strength*/) { return true; }
+bool AFootballer::KnockBallOn_Validate(float /*deltaSeconds*/, float /*Strength*/) { return true; }
 
 // ----------------------------------------------------------------------------
 // Shooting
@@ -429,14 +446,6 @@ void AFootballer::ShootBall_Implementation(float Power, FVector DesiredDirection
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
         SM->AddImpulse(DesiredDirection, NAME_None, true);
-        // Cap speed
-        FVector V = SM->GetPhysicsLinearVelocity();
-        const float S = V.Size2D();
-        if (S > MAX_BALL_SPEED_CM_S)
-        {
-            const FVector Capped = V.GetSafeNormal2D() * MAX_BALL_SPEED_CM_S;
-            SM->SetPhysicsLinearVelocity(FVector(Capped.X, Capped.Y, V.Z), false);
-        }
     }
 
     ThinksHasPossession = false;
@@ -517,8 +526,8 @@ void AFootballer::PassBall_Implementation(float Power, FVector DesiredDirection)
     Pass.Z = 0.f;
 
     const float Size = Pass.Size();
-    const float MIN_PASS_LENGTH = 500.f;    // 5m
-    const float MAX_PASS_LENGTH = 3000.f;   // 30m
+    const float MIN_PASS_LENGTH = 500.f;   // 5m
+    const float MAX_PASS_LENGTH = 3000.f;  // 30m
     const float Clamped = FMath::Clamp(Size, MIN_PASS_LENGTH, MAX_PASS_LENGTH);
 
     Pass *= (Clamped / Size);
@@ -530,14 +539,6 @@ void AFootballer::PassBall_Implementation(float Power, FVector DesiredDirection)
     if (UStaticMeshComponent* SM = Ball->GetStaticMeshComponent())
     {
         SM->AddImpulse(Needed, NAME_None, true);
-        // Cap speed
-        FVector V = SM->GetPhysicsLinearVelocity();
-        const float S = V.Size2D();
-        if (S > MAX_BALL_SPEED_CM_S)
-        {
-            const FVector Capped = V.GetSafeNormal2D() * MAX_BALL_SPEED_CM_S;
-            SM->SetPhysicsLinearVelocity(FVector(Capped.X, Capped.Y, V.Z), false);
-        }
     }
 
     ThinksHasPossession = false;
