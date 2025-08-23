@@ -1,33 +1,34 @@
-#include "Ballsack.h"            // <-- MUST be FIRST
-#include "OSF.h"
+// Fill out your copyright notice in the Description page of Project Settings.
 
+#include "Ballsack.h"          // <-- own header MUST be first
+#include "EngineUtils.h"       // TActorIterator
+
+// Sets default values
 ABallsack::ABallsack()
 {
-    PrimaryActorTick.bCanEverTick = true;
-
-    BallMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BallMesh"));
-    SetRootComponent(BallMesh);
-
-    // Enable physics
-    BallMesh->SetSimulatePhysics(true);
-    BallMesh->SetNotifyRigidBodyCollision(true);
-
-    // Set collision
-    BallMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-    BallMesh->SetCollisionObjectType(ECC_PhysicsBody);
-    BallMesh->SetCollisionResponseToAllChannels(ECR_Block);
-
-    // Optional tuning
-    BallMesh->SetLinearDamping(0.15f);
-    BallMesh->SetAngularDamping(0.3f);
+	// Set this actor to call Tick() every frame. Turn off if not needed for perf.
+	PrimaryActorTick.bCanEverTick = true;
 }
 
+// Called when the game starts or when spawned
 void ABallsack::BeginPlay()
 {
-    Super::BeginPlay();
+	Super::BeginPlay();
 }
 
-void ABallsack::Tick(float DeltaSeconds)
+// Called every frame
+void ABallsack::Tick(float DeltaTime)
 {
-    Super::Tick(DeltaSeconds);
+	Super::Tick(DeltaTime);
+}
+
+ABallsack* ABallsack::GetWorldBall(UWorld* World)
+{
+	if (!World) return nullptr;
+
+	for (TActorIterator<ABallsack> It(World); It; ++It)
+	{
+		return *It; // first one found
+	}
+	return nullptr;
 }
