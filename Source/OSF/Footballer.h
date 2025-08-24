@@ -1,199 +1,197 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
+﻿// Footballer.h
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Ballsack.h"
-#include "OSF.h"
+#include "Footballer.generated.h"
 
 class AFootballerController;
 class AFootballerAIController;
 class AFootballTeam;
 
-#include "Footballer.generated.h"
-
 UCLASS()
 class OSF_API AFootballer : public ACharacter
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    // Useful typedefs
-    typedef struct _FootballAttributeInfo {
-        int SprintSpeed;
-    } FootballAttributeInfo;
+	// ----- Types -----
+	struct FootballAttributeInfo
+	{
+		int SprintSpeed = 75; // km/h-ish scale used by project (multiplied to cm/s in BeginPlay)
+	};
 
-    typedef enum class _PendingActionType {
-        FootballerActionNone,
-        FootballerActionShot,
-        FootballerActionPass,
-    } PendingActionType;
+	enum class PendingActionType : uint8
+	{
+		FootballerActionNone,
+		FootballerActionShot,
+		FootballerActionPass,
+	};
 
-    typedef struct _PendingActionInfo {
-        PendingActionType Type;
-        float Power;
-        FVector Direction;
-    } PendingActionInfo;
+	struct PendingActionInfo
+	{
+		PendingActionType Type = PendingActionType::FootballerActionNone;
+		float   Power = 0.f;
+		FVector Direction = FVector::ZeroVector;
+	};
 
-    AFootballer();
+public:
+	AFootballer();
 
-    // MARK: - Override Functions
-    virtual void BeginPlay() override;
-    virtual void Tick(float DeltaSeconds) override;
-    virtual void SetupPlayerInputComponent(class UInputComponent* InputComponent) override;
-    virtual void GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const override;
+	// AActor
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 
-    // MARK: - Authority-set (replicated) properties
+	// APawn
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-    UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
-    FVector DesiredMovement;
+	// Rep
+	virtual void GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const override;
 
-    UPROPERTY(Replicated)
-    float DesiredSprintStrength;
+	// ----------------- Replicated state -----------------
+	UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
+	FVector DesiredMovement = FVector::ZeroVector;
 
-    UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
-    ABallsack* Ball;
+	UPROPERTY(Replicated)
+	float DesiredSprintStrength = 0.f;
 
-    /** Player is actively moving to gain/keep the ball */
-    UPROPERTY(Replicated)
-    bool GoingForPossession;
+	UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
+	ABallsack* Ball = nullptr;
 
-    /** Local belief if we currently control the ball (between touches). */
-    UPROPERTY(Replicated)
-    bool ThinksHasPossession;
+	UPROPERTY(Replicated)
+	bool GoingForPossession = false;
 
-    /** Waiting to receive a pass */
-    UPROPERTY(Replicated)
-    bool WaitingForPass;
+	UPROPERTY(Replicated)
+	bool ThinksHasPossession = false;
 
-    /** Anti-spam flag cleared when far enough from ball */
-    UPROPERTY(Replicated)
-    bool JustKickedBall;
+	UPROPERTY(Replicated)
+	bool WaitingForPass = false;
 
-    /** Last time we actually imparted a touch/kick to the ball */
-    UPROPERTY(Replicated)
-    float LastKickTime;
+	UPROPERTY(Replicated)
+	bool JustKickedBall = false;
 
-    /** Controller that owns this footballer when under player control */
-    UPROPERTY(Replicated)
-    AFootballerController* FootballerController;
+	UPROPERTY(Replicated)
+	float LastKickTime = 0.f;
 
-    //UPROPERTY(Replicated)
-    FootballAttributeInfo FootballAttributes;
+	UPROPERTY(Replicated)
+	AFootballerController* FootballerController = nullptr;
 
-    UPROPERTY(Replicated)
-    FString DisplayName;
+	// (Not replicated—static sample)
+	FootballAttributeInfo FootballAttributes;
 
-    /** Team reference */
-    UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
-    AFootballTeam* Team;
+	UPROPERTY(Replicated)
+	FString DisplayName;
 
-    /** AI controller for hot-swap */
-    UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
-    AFootballerAIController* AIController;
+	UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
+	AFootballTeam* Team = nullptr;
 
-    //UPROPERTY(Replicated)
-    PendingActionInfo PendingAction;
+	UPROPERTY(BlueprintReadWrite, Category = Custom, Replicated)
+	AFootballerAIController* AIController = nullptr;
 
-    UPROPERTY(Replicated, ReplicatedUsing = OnRep_ControlledByPlayer)
-    bool ControlledByPlayer;
+	// (Not replicated intentionally; queued locally)
+	PendingActionInfo PendingAction;
 
-    /** Cache of teammates */
-    UPROPERTY(Replicated)
-    TArray<AFootballer*> CachedTeammates;
+	UPROPERTY(Replicated, ReplicatedUsing = OnRep_ControlledByPlayer)
+	bool ControlledByPlayer = false;
 
-    UPROPERTY(Replicated)
-    bool DoneInitialSetup;
+	UPROPERTY(Replicated)
+	TArray<AFootballer*> CachedTeammates;
 
-    /** Possession flag: true when we should “carry” (dribble) the ball instead of blasting it */
-    UPROPERTY(Replicated)
-    bool bHasPossession = false;
+	UPROPERTY(Replicated)
+	bool DoneInitialSetup = false;
 
-    // MARK: - Uncategorized
+	// ----------------- Cosmetic helpers -----------------
+	UPROPERTY(BlueprintReadWrite, Category = Custom)
+	UStaticMeshComponent* PlayerControlIndicator = nullptr;
 
-    UFUNCTION()
-    void SetDesiredMovement(FVector movement);
+	UPROPERTY(BlueprintReadWrite, Category = Custom)
+	UStaticMeshComponent* TargetingIndicator = nullptr;
 
-    UFUNCTION(Server, Reliable, WithValidation)
-    void Server_SetDesiredMovement(FVector movement);
-    virtual void Server_SetDesiredMovement_Implementation(FVector movement);
-    virtual bool Server_SetDesiredMovement_Validate(FVector movement);
+	// ----------------- Commands / RPCs -----------------
+	UFUNCTION()
+	void SetDesiredMovement(FVector Movement);
 
-    UFUNCTION(Server, Reliable, WithValidation)
-    void SetDesiredSprintStrength(float strength);
-    virtual void SetDesiredSprintStrength_Implementation(float strength);
-    virtual bool SetDesiredSprintStrength_Validate(float strength);
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_SetDesiredMovement(FVector Movement);
+	virtual void Server_SetDesiredMovement_Implementation(FVector Movement);
+	virtual bool Server_SetDesiredMovement_Validate(FVector Movement) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
-    void Server_GainPlayerControl(AFootballerController* newController);
+	UFUNCTION(Server, Reliable, WithValidation)
+	void SetDesiredSprintStrength(float Strength);
+	virtual void SetDesiredSprintStrength_Implementation(float Strength);
+	virtual bool SetDesiredSprintStrength_Validate(float Strength) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
-    void Server_LosePlayerControl();
+	UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
+	void Server_GainPlayerControl(AFootballerController* NewController);
+	virtual void Server_GainPlayerControl_Implementation(AFootballerController* NewController);
+	virtual bool Server_GainPlayerControl_Validate(AFootballerController* /*NewController*/) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = Custom)
-    bool IsControlledByPlayer();
+	UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
+	void Server_LosePlayerControl();
+	virtual void Server_LosePlayerControl_Implementation();
+	virtual bool Server_LosePlayerControl_Validate() { return true; }
 
-    UPROPERTY(BlueprintReadWrite, Category = Custom)
-    UStaticMeshComponent* PlayerControlIndicator;
+	UFUNCTION(BlueprintCallable, Category = Custom)
+	bool IsControlledByPlayer() { return ControlledByPlayer; }
 
-    void ShowTargetingIndicator();
-    void HideTargetingIndicator();
+	void ShowTargetingIndicator();
+	void HideTargetingIndicator();
 
-    UPROPERTY(BlueprintReadWrite, Category = Custom)
-    UStaticMeshComponent* TargetingIndicator;
+	// Queue actions
+	UFUNCTION(BlueprintCallable, Category = "Queue Actions")
+	void ClearPendingAction();
+	UFUNCTION(BlueprintCallable, Category = "Queue Actions")
+	void SetPendingShot(float Power, FVector DesiredDirection);
+	UFUNCTION(BlueprintCallable, Category = "Queue Actions")
+	void SetPendingPass(float Power, FVector DesiredDirection);
 
-    UFUNCTION(BlueprintCallable, Category = "Queue Actions")
-    void ClearPendingAction();
+	// Ball helpers
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	FVector DesiredMovementOrForwardVector();
 
-    UFUNCTION(BlueprintCallable, Category = "Queue Actions")
-    void SetPendingShot(float power, FVector desiredDirection);
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	bool CanKickBall();
 
-    UFUNCTION(BlueprintCallable, Category = "Queue Actions")
-    void SetPendingPass(float power, FVector desiredDirection);
+	// Actions on the ball
+	UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
+	void KnockBallOn(float DeltaSeconds, float Strength);
+	virtual void KnockBallOn_Implementation(float DeltaSeconds, float Strength);
+	virtual bool KnockBallOn_Validate(float /*DeltaSeconds*/, float /*Strength*/) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = "Control")
-    FVector DesiredMovementOrForwardVector();
+	UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
+	void ShootBall(float Power, FVector DesiredDirection);
+	virtual void ShootBall_Implementation(float Power, FVector DesiredDirection);
+	virtual bool ShootBall_Validate(float /*Power*/, FVector /*Dir*/) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = "Control")
-    bool CanKickBall();
+	UFUNCTION(Server, BlueprintCallable, Category = Custom, Reliable, WithValidation)
+	void PassBall(float Power, FVector DesiredDirection);
+	virtual void PassBall_Implementation(float Power, FVector DesiredDirection);
+	virtual bool PassBall_Validate(float /*Power*/, FVector /*Dir*/) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
-    void KnockBallOn(float deltaSeconds, float strength);
+	// Team helpers
+	UFUNCTION(BlueprintCallable, Category = Custom)
+	TArray<AFootballer*> Teammates();
+	AFootballer* FindPassTarget(float Power, FVector DesiredDirection);
 
-    UFUNCTION(BlueprintCallable, Category = Custom, Server, Reliable, WithValidation)
-    void ShootBall(float power, FVector desiredDirection);
+	// Movement
+	UFUNCTION(BlueprintCallable, Category = "Movement")
+	void MoveToBallForKick(FVector DesiredEndDirection, float DeltaSeconds);
+	void MoveToBallForPass(FVector DesiredMove, float DeltaSeconds);
 
-    UFUNCTION(Server, BlueprintCallable, Category = Custom, Reliable, WithValidation)
-    void PassBall(float power, FVector desiredDirection);
+	UFUNCTION(BlueprintCallable, Category = "Movement")
+	void FreeMoveDesired();
 
-    AFootballer* FindPassTarget(float power, FVector desiredDirection);
+	UFUNCTION(Server, Reliable, WithValidation)
+	void SetGoingForPossession(bool bGoing);
+	virtual void SetGoingForPossession_Implementation(bool bGoing);
+	virtual bool SetGoingForPossession_Validate(bool /*bGoing*/) { return true; }
 
-    UFUNCTION(BlueprintCallable, Category = "Movement")
-    void MoveToBallForKick(FVector desiredEndDirection, float deltaSeconds);
-
-    void MoveToBallForPass(FVector desiredMovement, float deltaSeconds);
-
-    /** Moves based on DesiredMovement without trying to move toward the ball. */
-    UFUNCTION(BlueprintCallable, Category = "Movement")
-    void FreeMoveDesired();
-
-    UFUNCTION(Server, Reliable, WithValidation)
-    void SetGoingForPossession(bool going);
-
-    UFUNCTION(BlueprintCallable, Category = Custom)
-    TArray<AFootballer*> Teammates();
-
-    /** Gentle carry of the ball while in possession (no blasting). */
-    UFUNCTION(Server, Reliable, WithValidation)
-    void DribbleBall(float DeltaSeconds);
-    virtual void DribbleBall_Implementation(float DeltaSeconds);
-    virtual bool DribbleBall_Validate(float DeltaSeconds) { return true; }
-
-    /** True if local input vector is meaningful */
-    bool HasMeaningfulInput() const;
+	// Helpers used in .cpp
+	static bool CanTouchNow(const UWorld* World, float LastTouch, float CooldownSeconds = 0.30f);
+	static FVector MakeValidDesired(FVector Movement, float Sprint01);
 
 private:
-    UFUNCTION()
-    void OnRep_ControlledByPlayer();
+	UFUNCTION()
+	void OnRep_ControlledByPlayer();
 };

@@ -1,59 +1,65 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// FootballerController.h
 
 #pragma once
 
-#include "Footballer.h"
+#include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "FootballerController.generated.h"
 
+class AFootballer;
+
 /**
- * 
+ * Player controller that translates legacy Input (WASD/Pad) into
+ * camera-relative movement and pushes it to the possessed AFootballer.
  */
 UCLASS()
 class OSF_API AFootballerController : public APlayerController
 {
 	GENERATED_BODY()
-	
-public:
-    // Called when the game starts or when spawned
-    virtual void BeginPlay() override;
-    
-    virtual void Tick(float DeltaSeconds) override;
-    
-    virtual void SetupInputComponent() override;
-    
-    virtual void GetLifetimeReplicatedProps(TArray< FLifetimeProperty > & OutLifetimeProps) const override;
-	
-	UFUNCTION(BlueprintCallable, Category="Assistance/Switching")
-    void SwitchToFootballer(AFootballer* footballer);
 
-    UFUNCTION(BlueprintCallable, Category="Assistance/Switching")
-    AFootballer* GetAutoswitchFootballer(bool rejectIfAlreadyControlled = true);
-    
-    UFUNCTION(Server, Reliable, WithValidation, BlueprintCallable, Category="Assistance/Switching")
-    void Autoswitch();
-    
-    UFUNCTION(BlueprintCallable, Category="Assistance/Switching")
-    void AutoswitchIfNeeded(); // TODO make this a server function if we use it in the future
-    
-    
-    void MoveForward(float axisValue);
-    void MoveRight(float axisValue);
-    void SprintAxisChanged(float axisValue);
-    void PassPressed();
-    void PassReleased();
-    void KickPressed();
-    void KickReleased();
-    void SwitchPlayerReleased();
-    void FreeMoveReleased();
-    
-    UPROPERTY(Replicated)
-    AFootballer* ControlledFootballer;
-    AFootballer* TargetedFootballer;
-    ABallsack* Ball;
-    
-private:
-    float PassStartTime, KickStartTime;
-    bool SpawnedTeammates;
-    bool DoneInitialSetup;
+public:
+	AFootballerController();
+
+	// APlayerController
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void SetupInputComponent() override;
+	virtual void OnPossess(APawn* InPawn) override;
+	virtual void OnUnPossess() override;
+
+	// Current controlled pawn (read-only outside)
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	AFootballer* GetControlledFootballer() const { return ControlledFootballer; }
+
+	// Switch to a specific footballer (called by GameMode or by us)
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	void SwitchToFootballer(AFootballer* NewFootballer);
+
+protected:
+	// ----- Axis input -----
+	void AxisMoveForward(float Value);
+	void AxisMoveRight(float Value);
+	void AxisSprint(float Value);
+
+	// ----- Actions -----
+	void ActionShoot();
+	void ActionPass();
+	void ActionThrough();
+	void ActionSwitchPlayer();
+
+	// Build world-space (camera-relative) desired move from axis values
+	FVector BuildDesiredMovement() const;
+
+	// Find a reasonable teammate to switch to (very simple cycle)
+	AFootballer* FindNextTeammate() const;
+
+protected:
+	// Stored axis values
+	float ForwardAxis = 0.f;  // W/S (+W, -S)
+	float RightAxis = 0.f;  // D/A (+D, -A)
+	float SprintAxis = 0.f;  // Space/Gamepad RT (0..1)
+
+	// The footballer we currently possess/control
+	UPROPERTY()
+	AFootballer* ControlledFootballer = nullptr;
 };
