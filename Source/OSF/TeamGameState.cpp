@@ -1,221 +1,142 @@
-// TeamGameState.cpp — UE5.3-friendly
-
-#include "TeamGameState.h"              // must be first
-#include "Ballsack.h"
-#include "Footballer.h"
+// TeamGameState.cpp - FULL FILE
+#include "TeamGameState.h"
 #include "FootballTeam.h"
+#include "Footballer.h"
+#include "FootballerAIController.h"
+#include "Ballsack.h"
 
-#include "UObject/ConstructorHelpers.h" // FClassFinder / FObjectFinder
-#include "Materials/MaterialInstanceConstant.h"
+#include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
-#include "Engine/World.h"
-#include "Net/UnrealNetwork.h"          // DOREPLIFETIME
-
-// File-scope statics
-static TSubclassOf<AFootballer> GFootballerBPClass = nullptr;
-static UMaterialInstanceConstant* GOrangeMI = nullptr;
+#include "GameFramework/Controller.h"
+#include "GameFramework/PlayerStart.h"
 
 ATeamGameState::ATeamGameState()
 {
-	// Find BPFootballer (expects the Blueprint asset to live at /Game/Blueprints/BPFootballer)
-	{
-		static ConstructorHelpers::FClassFinder<AFootballer> BPClass(TEXT("/Game/Blueprints/BPFootballer"));
-		if (BPClass.Succeeded())
-		{
-			GFootballerBPClass = BPClass.Class;
-		}
-	}
-
-	// Find orange material instance
-	{
-		static ConstructorHelpers::FObjectFinder<UMaterialInstanceConstant> Mat(
-			TEXT("/Game/Materials/MI_Template_BaseOrange.MI_Template_BaseOrange"));
-		if (Mat.Succeeded())
-		{
-			GOrangeMI = Mat.Object;
-		}
-	}
+	PrimaryActorTick.bCanEverTick = false;
 }
-
-void ATeamGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	DOREPLIFETIME(ATeamGameState, HomeTeam);
-	DOREPLIFETIME(ATeamGameState, AwayTeam);
-	DOREPLIFETIME(ATeamGameState, Ball);
-}
-
-void ATeamGameState::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (HasAuthority())
-	{
-		// Your server-side init here (left as in your original)
-	}
-}
-
-/* ======= Everything below mirrors your original logic, but swaps
-		   footballerClass -> GFootballerBPClass and
-		   orangeMesh      -> GOrangeMI                                 ======= */
-
-struct FFootballerInfo { FString Name; };
-
-struct FPosition
-{
-	int IndexInFormation;
-	FString Name;
-	FVector2D Location; // X=0 goal line .. 1 midfield; Y=-1 left flank .. 1 right flank
-};
-
-struct FFormation
-{
-	FString Name;
-	FPosition Positions[11];
-};
-
-static FFormation Formation4231 =
-{
-	TEXT("4-2-3-1"),
-	{
-		{ 0,  "GK",  { 0.0, 0.5 } },
-
-		{ 1,  "RB",  { 0.3, 1 } },
-		{ 2,  "RCB", { 0.2, 0.75 } },
-		{ 3,  "LCB", { 0.2, 0.25 } },
-		{ 4,  "LB",  { 0.3, 0 } },
-
-		{ 5,  "RDM", { 0.45, 0.75 } },
-		{ 6,  "LDM", { 0.55, 0.25 } },
-
-		{ 7,  "RAM", { 0.8, 1 } },
-		{ 8,  "CAM", { 0.7, 0.6 } },
-		{ 9,  "LAM", { 0.8, 0 } },
-
-		{ 10, "CF",  { 1, 0.4 } },
-	}
-};
-
-static FFormation FormationDebug =
-{
-	TEXT("D-E-B-U-G"),
-	{
-		{ 0,  "GK",  { 0.1,  0 } },
-
-		{ 1,  "RB",  { 0.3,  0.8 } },
-		{ 2,  "RCB", { 0.3, -0.5 } },
-		{ 3,  "LCB", { 0.3, -0.5 } },
-		{ 4,  "LB",  { 0.3, -0.8 } },
-
-		{ 5,  "RDM", { 0.5,  0.5 } },
-		{ 6,  "LDM", { 0.5, -0.5 } },
-
-		{ 7,  "RAM", { 0.8,  0.8 } },
-		{ 8,  "CAM", { 0.8,  0 } },
-		{ 9,  "LAM", { 0.8, -0.8 } },
-
-		{ 10, "CF",  { 1,    0.4 } },
-	}
-};
 
 void ATeamGameState::LoadSampleState()
 {
-	static const int32 NUM_PLAYERS = 11;
+	UWorld* World = GetWorld();
+	if (!World) return;
 
-	static FFootballerInfo HomePlayers[11] =
+	// Create teams (simple AActors that hold arrays of players)
+	if (!HomeTeam) HomeTeam = World->SpawnActor<AFootballTeam>();
+	if (!AwayTeam) AwayTeam = World->SpawnActor<AFootballTeam>();
+
+	// Find or spawn the ball
+	if (!Ball)
 	{
-		{ TEXT("Szczczczczczcz") },
-
-		{ TEXT("Douche") },
-		{ TEXT("BFG") },
-		{ TEXT("Gabby") },
-		{ TEXT("Nachos") },
-
-		{ TEXT("Cock") },
-		{ TEXT("Santa Gorgonzola") },
-
-		{ TEXT("Sign Da Ting") },
-		{ TEXT("Tattoo Haram") },
-		{ TEXT("Wiz Khalifa - No Sleep") },
-
-		{ TEXT("Goat Cheese") }
-	};
-
-	static FFootballerInfo AwayPlayers[11] =
-	{
-		{ TEXT("Newer") },
-
-		{ TEXT("Lame") },
-		{ TEXT("Boatingle") },
-		{ TEXT("Artines") },
-		{ TEXT("God") },
-
-		{ TEXT("Shabby") },
-		{ TEXT("Vidal Sassoon") },
-
-		{ TEXT("Robbery I") },
-		{ TEXT("Giraffe") },
-		{ TEXT("Robbery II") },
-
-		{ TEXT("Lrzwrzszcszczewski") }
-	};
-
-	for (int32 i = 0; i < NUM_PLAYERS; ++i)
-	{
-		const FFootballerInfo Home = HomePlayers[i];
-		const FFootballerInfo Away = AwayPlayers[i];
-
-		AFootballer* HomeFootballer = PlayerFromProperties(HomeTeam, i, Home.Name);
-		if (HomeFootballer && GOrangeMI)
+		// Prefer an already placed ball in the level
+		for (TActorIterator<ABallsack> It(World); It; ++It)
 		{
-			if (UMeshComponent* Mesh = HomeFootballer->GetMesh())
+			Ball = *It;
+			break;
+		}
+		// If still none and a class is specified, spawn one at center
+		if (!Ball && BallClass)
+		{
+			Ball = World->SpawnActor<ABallsack>(BallClass, FVector::ZeroVector, FRotator::ZeroRotator);
+		}
+	}
+
+	// Field extents (match your BP_Field size). Adjust as needed.
+	const float HalfLength = 4500.f; // X half-length (goal-to-center)
+	const float HalfWidth = 3000.f; // Y half-width
+
+	// Build sides
+	BuildTeam(/*bIsHome=*/true, PlayersPerSide, HalfWidth, HalfLength);
+	BuildTeam(/*bIsHome=*/false, PlayersPerSide, HalfWidth, HalfLength);
+
+	// Put ball on center spot
+	if (Ball)
+	{
+		Ball->SetActorLocation(FVector(0.f, 0.f, Ball->GetActorLocation().Z));
+		Ball->SetActorHiddenInGame(false);
+	}
+
+	// If home starts, optionally we could set a flag on home’s first player, etc.
+}
+
+void ATeamGameState::BuildTeam(bool bIsHome, int32 NumPlayers, float HalfWidth, float HalfLength)
+{
+	UWorld* World = GetWorld();
+	if (!World || !FootballerClass) return;
+
+	AFootballTeam*& TeamRef = bIsHome ? HomeTeam : AwayTeam;
+	if (!TeamRef) TeamRef = World->SpawnActor<AFootballTeam>();
+	if (!TeamRef) return;
+
+	TeamRef->Footballers.Empty();
+
+	for (int32 i = 0; i < NumPlayers; ++i)
+	{
+		const FVector SpawnLoc = KickoffLocation(bIsHome, i, HalfWidth, HalfLength);
+		const FRotator SpawnRot = FRotator(0.f, bIsHome ? (bHomeAttacksRight ? 0.f : 180.f)
+			: (bHomeAttacksRight ? 180.f : 0.f), 0.f);
+
+		AFootballer* F = World->SpawnActor<AFootballer>(FootballerClass, SpawnLoc, SpawnRot);
+		if (!F) continue;
+
+		F->SetActorHiddenInGame(false);   // ensure visible
+		F->SetActorEnableCollision(true);
+
+		// Give them an AI if available
+		if (FootballerAIControllerClass)
+		{
+			AFootballerAIController* AI = World->SpawnActor<AFootballerAIController>(FootballerAIControllerClass, SpawnLoc, SpawnRot);
+			if (AI)
 			{
-				Mesh->SetMaterial(0, GOrangeMI);
+				AI->Possess(F);
 			}
 		}
 
-		if (HomeTeam) { HomeTeam->Footballers.Add(HomeFootballer); }
-		if (AwayTeam) { AwayTeam->Footballers.Add(PlayerFromProperties(AwayTeam, i, Away.Name)); }
+		// Add to team
+		TeamRef->Footballers.Add(F);
+
+		// Mark team pointer if your AFootballer exposes it
+		F->Team = TeamRef;
 	}
 }
 
-static float HalfFieldWidth = 2750.f;
-static float HalfFieldLength = 4755.f;
-
-AFootballer* ATeamGameState::PlayerFromProperties(AFootballTeam* Team, int32 Index, const FString Name)
+FVector ATeamGameState::KickoffLocation(bool bIsHomeSide, int32 Index, float HalfWidth, float HalfLength) const
 {
-	const FPosition Pos = FormationDebug.Positions[Index];
+	// Simple 4-4-2-ish lines (GK + 4 defenders + 4 mids + 2 forwards)
+	// Index 0: GK, 1-4 DEF, 5-8 MID, 9-10 FWD, rest if any spread in midfield
+	const bool bHomeOnRight = bHomeAttacksRight;
+	const float SideSign = (bIsHomeSide == bHomeOnRight) ? -1.f : 1.f; // put team on their own half
 
-	FVector Location(0, 0, 100);
+	float X = SideSign * HalfLength * 0.65f; // base line
+	float Y = 0.f;
 
-	// X: 0 goalie … 1 striker; Away is +X, Home is -X.
-	float CorrectX = 1.f - Pos.Location.X;
-	if (Team == HomeTeam) { CorrectX *= -1.f; }
-
-	Location.X = CorrectX * HalfFieldLength * 0.9f;
-	Location.Y = Pos.Location.Y * HalfFieldWidth * 0.9f;
-
-	FTransform SpawnTM;
-	SpawnTM.SetLocation(Location);
-
-	AActor* Spawned = nullptr;
-	if (GFootballerBPClass)
+	if (Index == 0)
 	{
-		Spawned = GetWorld()->SpawnActor(GFootballerBPClass, &SpawnTM);
+		// GK near penalty area
+		X = SideSign * HalfLength * 0.9f;
+		Y = 0.f;
+	}
+	else if (Index >= 1 && Index <= 4)
+	{
+		// 4 defenders line
+		X = SideSign * HalfLength * 0.7f;
+		const float Slots[4] = { -0.6f, -0.2f, 0.2f, 0.6f };
+		Y = Slots[Index - 1] * HalfWidth;
+	}
+	else if (Index >= 5 && Index <= 8)
+	{
+		// 4 midfielders
+		X = SideSign * HalfLength * 0.45f;
+		const float Slots[4] = { -0.7f, -0.25f, 0.25f, 0.7f };
+		Y = Slots[Index - 5] * HalfWidth;
 	}
 	else
 	{
-		// Fallback: spawn native class if BP not found
-		Spawned = GetWorld()->SpawnActor<AFootballer>(AFootballer::StaticClass(), SpawnTM);
+		// forwards (or any extra beyond 10)
+		X = SideSign * HalfLength * 0.2f;
+		if (Index == 9)       Y = -0.25f * HalfWidth;
+		else if (Index == 10) Y = 0.25f * HalfWidth;
+		else                  Y = 0.f;
 	}
 
-	AFootballer* Footballer = Cast<AFootballer>(Spawned);
-	if (Footballer)
-	{
-		Footballer->DisplayName = Name;
-		Footballer->Team = Team;
-		Footballer->SetActorLocation(Location);
-	}
-	return Footballer;
+	return FVector(X, Y, 0.f);
 }

@@ -1,33 +1,31 @@
-﻿// Footballer.cpp
-#include "Footballer.h"
+﻿#include "Footballer.h"
 #include "OSF.h"
 #include "FootballerController.h"
 #include "FootballerAIController.h"
-#include "FootballTeam.h"
 #include "Goal.h"
 
 #include "EngineUtils.h"
-#include "GameFramework/CharacterMovementComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Net/UnrealNetwork.h"
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Sample attribute presets
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 static AFootballer::FootballAttributeInfo FA_Sample_Walcott()
 {
 	AFootballer::FootballAttributeInfo A; A.SprintSpeed = 95; return A;
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Construction
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 AFootballer::AFootballer()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	FootballAttributes = FA_Sample_Walcott();
 
-	// Initialize replicated gameplay state
 	DesiredMovement = FVector::ZeroVector;
 	DesiredSprintStrength = 0.f;
 
@@ -41,11 +39,24 @@ AFootballer::AFootballer()
 	AIController = nullptr;
 	Team = nullptr;
 	Ball = nullptr;
+
+	// --- Visibility belt & suspenders: never spawn hidden --------------------
+	SetActorHiddenInGame(false);
+	if (USkeletalMeshComponent* M = GetMesh())
+	{
+		M->SetVisibility(true, true);
+		M->SetHiddenInGame(false, true);
+		M->SetOwnerNoSee(false);
+		M->SetOnlyOwnerSee(false);
+		M->SetRenderInMainPass(true);
+		M->SetCastHiddenShadow(false);
+		M->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	}
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Replication
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -67,35 +78,43 @@ void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLif
 	DOREPLIFETIME(AFootballer, DoneInitialSetup);
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // AActor
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// World ball reference
 	Ball = ABallsack::GetWorldBall(GetWorld());
 	verify(Ball != nullptr);
 
+	// Indicators
 	if (TargetingIndicator) TargetingIndicator->SetVisibility(false);
 	if (!ControlledByPlayer && PlayerControlIndicator) PlayerControlIndicator->SetVisibility(false);
 
+	// Movement tuning
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
-		// Project used "SprintSpeed * 10" → keep that relation
-		Move->MaxWalkSpeed = FootballAttributes.SprintSpeed * 10.f;
+		Move->MaxWalkSpeed = FootballAttributes.SprintSpeed * 10.f; // keep project’s original relation
 		Move->BrakingFrictionFactor = 1.0f;
 		Move->bUseSeparateBrakingFriction = true;
 		Move->BrakingFriction = 3.f;
+	}
+
+	// Never hidden
+	SetActorHiddenInGame(false);
+	if (USkeletalMeshComponent* M = GetMesh())
+	{
+		M->SetHiddenInGame(false, true);
+		M->SetOwnerNoSee(false);
+		M->SetOnlyOwnerSee(false);
 	}
 
 	// small grace so we don't treat spawn-touch as a legal touch
 	LastKickTime = GetWorld()->GetTimeSeconds();
 }
 
-// -----------------------------------------------------------------------------
-// Static helpers (define here so there are no linker errors)
-// -----------------------------------------------------------------------------
 bool AFootballer::CanTouchNow(const UWorld* World, float LastTouch, float CooldownSeconds)
 {
 	return (World && (World->GetTimeSeconds() - LastTouch) > CooldownSeconds);
@@ -109,9 +128,9 @@ FVector AFootballer::MakeValidDesired(FVector Movement, float Sprint01)
 	return M * (0.5f + 0.5f * Sprint01);
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Tick
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
@@ -157,7 +176,7 @@ void AFootballer::Tick(float DeltaTime)
 			}
 			else
 			{
-				// Only knock if the user is *actually* trying to move roughly toward the ball
+				// Only knock if the user is actually trying to move roughly toward the ball
 				const FVector MoveDir = DesiredMovement.GetSafeNormal2D();
 				FVector ToBall = (Ball ? (Ball->GetActorLocation() - GetActorLocation()) : FVector::ZeroVector);
 				ToBall.Z = 0.f;
@@ -195,36 +214,47 @@ void AFootballer::Tick(float DeltaTime)
 	}
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Input
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-	// (Project uses classic input; controller maps call SetDesiredMovement / SetDesiredSprintStrength)
+	// old (non-Enhanced) input: controller feeds SetDesiredMovement / SetDesiredSprintStrength
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Indicators
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::ShowTargetingIndicator()
 {
 	if (TargetingIndicator) TargetingIndicator->SetVisibility(true);
 }
+
 void AFootballer::HideTargetingIndicator()
 {
 	if (TargetingIndicator) TargetingIndicator->SetVisibility(false);
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Control (RPCs)
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::Server_GainPlayerControl_Implementation(AFootballerController* NewController)
 {
 	if (AIController) { AIController->UnPossess(); }
 	FootballerController = NewController;
 	ControlledByPlayer = true;
+
+	// make sure we’re visible for the owning player
+	SetActorHiddenInGame(false);
+	if (USkeletalMeshComponent* M = GetMesh())
+	{
+		M->SetHiddenInGame(false, true);
+		M->SetOwnerNoSee(false);
+		M->SetOnlyOwnerSee(false);
+	}
 }
+
 void AFootballer::Server_LosePlayerControl_Implementation()
 {
 	if (AIController) { AIController->Possess(this); }
@@ -240,21 +270,23 @@ void AFootballer::OnRep_ControlledByPlayer()
 	}
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Pending actions
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::ClearPendingAction()
 {
 	PendingAction.Type = PendingActionType::FootballerActionNone;
 	PendingAction.Power = 0.f;
 	PendingAction.Direction = FVector::ZeroVector;
 }
+
 void AFootballer::SetPendingShot(float Power, FVector DesiredDirection)
 {
 	PendingAction.Type = PendingActionType::FootballerActionShot;
 	PendingAction.Power = Power;
 	PendingAction.Direction = DesiredDirection;
 }
+
 void AFootballer::SetPendingPass(float Power, FVector DesiredDirection)
 {
 	PendingAction.Type = PendingActionType::FootballerActionPass;
@@ -262,9 +294,9 @@ void AFootballer::SetPendingPass(float Power, FVector DesiredDirection)
 	PendingAction.Direction = DesiredDirection;
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Helpers
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 FVector AFootballer::DesiredMovementOrForwardVector()
 {
 	return (DesiredMovement.SizeSquared2D() <= KINDA_SMALL_NUMBER) ? GetActorForwardVector() : DesiredMovement;
@@ -280,9 +312,9 @@ bool AFootballer::CanKickBall()
 	return D.Size() < GMinDistanceForTouch;
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Dribbling
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::KnockBallOn_Implementation(float /*DeltaSeconds*/, float Strength)
 {
 	if (!Ball) return;
@@ -299,7 +331,6 @@ void AFootballer::KnockBallOn_Implementation(float /*DeltaSeconds*/, float Stren
 
 	const FVector BallVel = Ball->GetVelocity();
 	const FVector DesiredVel = MoveDir * Strength * 100.f;
-
 	FVector Needed = DesiredVel - BallVel;
 
 	// Clamp to prevent huge blasts
@@ -313,9 +344,9 @@ void AFootballer::KnockBallOn_Implementation(float /*DeltaSeconds*/, float Stren
 	}
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Shooting
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 static const float MAX_POWER = 1.0f;
 static const float MIN_POWER = 0.5f;
 
@@ -375,9 +406,9 @@ void AFootballer::ShootBall_Implementation(float Power, FVector DesiredDirection
 	LastKickTime = GetWorld()->GetTimeSeconds();
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Passing
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 TArray<AFootballer*> AFootballer::Teammates()
 {
 	if (CachedTeammates.Num() != 0) return CachedTeammates;
@@ -407,7 +438,7 @@ AFootballer* AFootballer::FindPassTarget(float Power, FVector DesiredDirection)
 		if (!Other) continue;
 
 		const FVector ToOther = Other->GetActorLocation() - GetActorLocation();
-		const float   AngleToOther = FMath::Atan2(ToOther.Y, ToOther.X);
+		const float AngleToOther = FMath::Atan2(ToOther.Y, ToOther.X);
 
 		const float Angular = FMath::Abs(DesiredAngle - AngleToOther);
 		const float Linear = ToOther.Size();
@@ -470,9 +501,9 @@ void AFootballer::PassBall_Implementation(float Power, FVector DesiredDirection)
 	Receiver->WaitingForPass = true;
 }
 
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Movement
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 void AFootballer::MoveToBallForKick(FVector /*DesiredEndDirection*/, float /*DeltaSeconds*/)
 {
 	if (!Ball) return;
@@ -536,9 +567,9 @@ void AFootballer::FreeMoveDesired()
 	AddMovementInput(DesiredMovement * (0.5f + 0.5f * DesiredSprintStrength));
 }
 
-// -----------------------------------------------------------------------------
-// Client-side input mirroring (only _Implementation bodies here; _Validate inline in .h)
-// -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Client-side input mirroring
+// ----------------------------------------------------------------------------
 void AFootballer::Server_SetDesiredMovement_Implementation(FVector Movement)
 {
 	DesiredMovement = MakeValidDesired(Movement, DesiredSprintStrength);
