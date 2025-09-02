@@ -1,21 +1,9 @@
-﻿// FootballerController.cpp
-
-#include "FootballerController.h"
-#include "Footballer.h"
-#include "EngineUtils.h"
-#include "Kismet/GameplayStatics.h"
-#include "Camera/PlayerCameraManager.h"
+﻿#include "FootballerController.h"
+#include "Kismet/KismetMathLibrary.h"
 
 AFootballerController::AFootballerController()
 {
 	bShowMouseCursor = false;
-	bEnableClickEvents = false;
-	bEnableTouchEvents = false;
-}
-
-void AFootballerController::BeginPlay()
-{
-	Super::BeginPlay();
 }
 
 void AFootballerController::OnPossess(APawn* InPawn)
@@ -24,147 +12,77 @@ void AFootballerController::OnPossess(APawn* InPawn)
 	ControlledFootballer = Cast<AFootballer>(InPawn);
 }
 
-void AFootballerController::OnUnPossess()
-{
-	Super::OnUnPossess();
-	ControlledFootballer = nullptr;
-}
-
 void AFootballerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 	check(InputComponent);
 
-	// Axis (legacy)
-	InputComponent->BindAxis(TEXT("MoveForward"), this, &AFootballerController::AxisMoveForward);
-	InputComponent->BindAxis(TEXT("MoveRight"), this, &AFootballerController::AxisMoveRight);
-	InputComponent->BindAxis(TEXT("SprintAxis"), this, &AFootballerController::AxisSprint);
+	InputComponent->BindAxis(TEXT("MoveForward"), this, &AFootballerController::MoveForward);
+	InputComponent->BindAxis(TEXT("MoveRight"), this, &AFootballerController::MoveRight);
 
-	// Actions (FIFA-style you chose)
-	InputComponent->BindAction(TEXT("Shoot"), IE_Pressed, this, &AFootballerController::ActionShoot);
-	InputComponent->BindAction(TEXT("Pass"), IE_Pressed, this, &AFootballerController::ActionPass);
-	InputComponent->BindAction(TEXT("Through"), IE_Pressed, this, &AFootballerController::ActionThrough);
-	InputComponent->BindAction(TEXT("SwitchPlayer"), IE_Pressed, this, &AFootballerController::ActionSwitchPlayer);
+	InputComponent->BindAction(TEXT("Sprint"), IE_Pressed, this, &AFootballerController::SprintPressed);
+	InputComponent->BindAction(TEXT("Sprint"), IE_Released, this, &AFootballerController::SprintReleased);
+
+	InputComponent->BindAction(TEXT("Shoot"), IE_Pressed, this, &AFootballerController::Shoot);
+	InputComponent->BindAction(TEXT("Pass"), IE_Pressed, this, &AFootballerController::Pass);
+	InputComponent->BindAction(TEXT("KnockOn"), IE_Pressed, this, &AFootballerController::KnockOn);
 }
 
-void AFootballerController::Tick(float DeltaSeconds)
+FVector AFootballerController::BuildDesiredMove() const
 {
-	Super::Tick(DeltaSeconds);
+	const float Yaw =
+		(bUseCameraYaw && PlayerCameraManager)
+		? PlayerCameraManager->GetCameraRotation().Yaw
+		: GetControlRotation().Yaw;
 
+	const FRotator YawRot(0.f, Yaw, 0.f);
+	const FVector CamFwd = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
+	const FVector CamRight = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
+
+	const FVector Desired = (CamFwd * AxisForward) + (CamRight * AxisRight);
+	return FVector(Desired.X, Desired.Y, 0.f);
+}
+
+void AFootballerController::MoveForward(float Val)
+{
+	AxisForward = Val;
 	if (!ControlledFootballer) return;
-
-	// Build camera-relative move and push to the pawn
-	const FVector DesiredMove = BuildDesiredMovement();
-	ControlledFootballer->SetDesiredMovement(DesiredMove);
-	ControlledFootballer->SetDesiredSprintStrength(FMath::Clamp(SprintAxis, 0.f, 1.f));
+	ControlledFootballer->SetDesiredMovement(BuildDesiredMove());
 }
 
-FVector AFootballerController::BuildDesiredMovement() const
+void AFootballerController::MoveRight(float Val)
 {
-	// Camera yaw (ignore pitch/roll)
-	FRotator CamRot = FRotator::ZeroRotator;
-	if (PlayerCameraManager)
-	{
-		CamRot = PlayerCameraManager->GetCameraRotation();
-	}
-	CamRot.Pitch = 0.f;
-	CamRot.Roll = 0.f;
-
-	const FVector CamForward = CamRot.Vector();                // X forward (world)
-	const FVector CamRight = FRotationMatrix(CamRot).GetUnitAxis(EAxis::Y); // Y right (world)
-
-	FVector Desired = CamForward * ForwardAxis + CamRight * RightAxis;
-	Desired.Z = 0.f;
-	Desired = Desired.GetClampedToMaxSize(1.f);
-	return Desired;
+	AxisRight = Val;
+	if (!ControlledFootballer) return;
+	ControlledFootballer->SetDesiredMovement(BuildDesiredMove());
 }
 
-void AFootballerController::AxisMoveForward(float Value)
+void AFootballerController::SprintPressed()
 {
-	ForwardAxis = FMath::Clamp(Value, -1.f, 1.f);
+	if (ControlledFootballer) ControlledFootballer->SetDesiredSprintStrength(1.f);
 }
 
-void AFootballerController::AxisMoveRight(float Value)
+void AFootballerController::SprintReleased()
 {
-	RightAxis = FMath::Clamp(Value, -1.f, 1.f);
+	if (ControlledFootballer) ControlledFootballer->SetDesiredSprintStrength(0.f);
 }
 
-void AFootballerController::AxisSprint(float Value)
-{
-	// Spacebar or RT gives 0..1 (keep it ≥0)
-	SprintAxis = FMath::Max(0.f, Value);
-}
-
-void AFootballerController::ActionShoot()
+void AFootballerController::Shoot()
 {
 	if (!ControlledFootballer) return;
-	const FVector Dir = BuildDesiredMovement().GetSafeNormal();
+	const FVector Dir = BuildDesiredMove().IsNearlyZero()
+		? GetPawn()->GetActorForwardVector()
+		: BuildDesiredMove().GetSafeNormal();
 	ControlledFootballer->ShootBall(1.f, Dir);
 }
 
-void AFootballerController::ActionPass()
+void AFootballerController::Pass()
 {
 	if (!ControlledFootballer) return;
-	const FVector Dir = BuildDesiredMovement().GetSafeNormal();
+	const FVector Dir = BuildDesiredMove().IsNearlyZero()
+		? GetPawn()->GetActorForwardVector()
+		: BuildDesiredMove().GetSafeNormal();
 	ControlledFootballer->PassBall(0.75f, Dir);
 }
 
-void AFootballerController::ActionThrough()
-{
-	if (!ControlledFootballer) return;
-	const FVector Dir = BuildDesiredMovement().GetSafeNormal();
-	// Light knock-on if we’re already in contact (or queues if not)
-	ControlledFootballer->KnockBallOn(0.f, 6.f); // strength tuned in your pawn
-	// Optional: also set a pending pass with smaller power:
-	// ControlledFootballer->PassBall(0.55f, Dir);
-}
-
-void AFootballerController::ActionSwitchPlayer()
-{
-	AFootballer* Next = FindNextTeammate();
-	if (Next)
-	{
-		SwitchToFootballer(Next);
-	}
-}
-
-void AFootballerController::SwitchToFootballer(AFootballer* NewFootballer)
-{
-	if (!NewFootballer) return;
-
-	// Release current
-	if (ControlledFootballer)
-	{
-		ControlledFootballer->Server_LosePlayerControl();
-	}
-
-	// Possess and mark
-	Possess(NewFootballer);
-	ControlledFootballer = NewFootballer;
-	NewFootballer->Server_GainPlayerControl(this);
-}
-
-AFootballer* AFootballerController::FindNextTeammate() const
-{
-	if (!ControlledFootballer || !ControlledFootballer->Team) return nullptr;
-
-	AFootballer* First = nullptr;
-	bool bReturnNext = false;
-
-	for (TActorIterator<AFootballer> It(GetWorld()); It; ++It)
-	{
-		AFootballer* F = *It;
-		if (!F || F->Team != ControlledFootballer->Team) continue;
-
-		if (!First) First = F;
-
-		if (bReturnNext)
-			return F;
-
-		if (F == ControlledFootballer)
-			bReturnNext = true;
-	}
-
-	// wrap-around
-	return First;
-}
+void AFootballerCon

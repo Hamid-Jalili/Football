@@ -1,10 +1,11 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
-#include "GameFramework/Actor.h"
-#include "Footballer.h"
-#include "FootballTeam.generated.h"
+#include "CoreMinimal.h"
+// include whatever base header you need here (e.g., #include "GameFramework/Actor.h")
+#include "Footballer.h"              // <-- ADD THIS real include
+#include "FootballTeam.generated.h"  // <-- MUST be the LAST include in the file
+
+
 
 UCLASS()
 class OSF_API AFootballTeam : public AActor
