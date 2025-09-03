@@ -1,100 +1,102 @@
 ﻿#include "Footballer.h"
+#include "FootballTeam.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "GameFramework/Controller.h"
-#include "Net/UnrealNetwork.h"
+#include "Kismet/GameplayStatics.h"
+#include "Ballsack.h"
+#include "Components/PrimitiveComponent.h"
 
 AFootballer::AFootballer()
 {
-	PrimaryActorTick.bCanEverTick = true;
-
-	bUseControllerRotationYaw = false;
-
-	if (UCharacterMovementComponent* Move = GetCharacterMovement())
-	{
-		Move->bOrientRotationToMovement = true;
-		Move->RotationRate = FRotator(0.f, 720.f, 0.f);
-		Move->MaxWalkSpeed = WalkSpeed;
-	}
+	PrimaryActorTick.bCanEverTick = false;
 }
 
 void AFootballer::BeginPlay()
 {
 	Super::BeginPlay();
-}
 
-void AFootballer::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-
-	if (!DesiredMoveWorld.IsNearlyZero(1e-3f))
+	if (TeamRef)
 	{
-		const FVector Move2D = FVector(DesiredMoveWorld.X, DesiredMoveWorld.Y, 0.f).GetClampedToMaxSize(1.f);
-		AddMovementInput(Move2D, 1.f);
-
-		if (bFaceMovement)
+		if (TeamRef->TeamID == 0 && TeamAMaterial)
 		{
-			const FRotator Target = Move2D.Rotation();
-			const FRotator NewRot = FMath::RInterpTo(GetActorRotation(), Target, DeltaSeconds, 10.f);
-			SetActorRotation(FRotator(0.f, NewRot.Yaw, 0.f));
+			GetMesh()->SetMaterial(0, TeamAMaterial);
+		}
+		else if (TeamRef->TeamID == 1 && TeamBMaterial)
+		{
+			GetMesh()->SetMaterial(0, TeamBMaterial);
 		}
 	}
 }
 
-/* -------- Desired movement input -------- */
-
-void AFootballer::SetDesiredMovement(const FVector& MovementWorld)
+int32 AFootballer::GetTeamID() const
 {
-	DesiredMoveWorld = MovementWorld.GetClampedToMaxSize(1.f);
+	return TeamRef ? TeamRef->TeamID : -1;
 }
 
-void AFootballer::SetDesiredMovement2D(const FVector2D& Movement2D)
+void AFootballer::SetDesiredMovement(const FVector& DesiredMoveWorld)
 {
-	const FVector As3D(Movement2D.X, Movement2D.Y, 0.f);
-	SetDesiredMovement(As3D);
+	FVector Dir = DesiredMoveWorld;
+	Dir.Z = 0.f;
+	if (!Dir.IsNearlyZero())
+	{
+		Dir.Normalize();
+		AddMovementInput(Dir, 1.f + DesiredSprintStrength);
+	}
+
+	// Face movement direction
+	if (!Dir.IsNearlyZero())
+	{
+		const FRotator TargetYaw = Dir.Rotation();
+		SetActorRotation(FRotator(0.f, TargetYaw.Yaw, 0.f));
+	}
+
+	// Adjust speed by sprint
+	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+	{
+		const float BaseSpeed = 420.f;
+		const float SprintAdd = 280.f;
+		Move->MaxWalkSpeed = BaseSpeed + SprintAdd * FMath::Clamp(DesiredSprintStrength, 0.f, 1.f);
+	}
 }
 
 void AFootballer::SetDesiredSprintStrength(float InStrength)
 {
-	DesiredSprint = FMath::Clamp(InStrength, 0.f, 1.f);
+	DesiredSprintStrength = FMath::Clamp(InStrength, 0.f, 1.f);
+}
 
-	if (UCharacterMovementComponent* Move = GetCharacterMovement())
+ABallsack* AFootballer::FindBall() const
+{
+	return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
+}
+
+void AFootballer::ShootBall(float Power, const FVector& DirectionWorld)
+{
+	if (ABallsack* Ball = FindBall())
 	{
-		const float TargetSpeed = FMath::Lerp(WalkSpeed, SprintSpeed, DesiredSprint);
-		Move->MaxWalkSpeed = TargetSpeed;
+		const FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
+		if (ToBall.SizeSquared2D() < FMath::Square(250.f))
+		{
+			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
+			{
+				const FVector Impulse = DirectionWorld.GetSafeNormal() * FMath::Clamp(Power, 0.f, 1.f) * 2200.f;
+				Prim->AddImpulse(Impulse, NAME_None, true);
+			}
+		}
 	}
 }
 
-/* -------- Ball interactions (stubs) -------- */
-
-void AFootballer::ShootBall(float /*Strength*/, const FVector& /*Direction*/) {}
-void AFootballer::PassBall(float /*Strength*/, const FVector& /*Direction*/) {}
-void AFootballer::KnockBallOn(float /*ParamA*/, float /*ParamB*/) {}
-
-/* -------- RPCs -------- */
-
-void AFootballer::Server_LosePlayerControl_Implementation()
+void AFootballer::PassBall(float Power, const FVector& DirectionWorld)
 {
-	bHasBall = false;
-}
-
-void AFootballer::Server_GainPlayerControl_Implementation(AController* NewController)
-{
-	if (NewController && NewController->GetPawn() != this)
+	if (ABallsack* Ball = FindBall())
 	{
-		NewController->Possess(this);
+		const FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
+		if (ToBall.SizeSquared2D() < FMath::Square(250.f))
+		{
+			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
+			{
+				const FVector Impulse = DirectionWorld.GetSafeNormal() * FMath::Clamp(Power, 0.f, 1.f) * 1400.f;
+				Prim->AddImpulse(Impulse, NAME_None, true);
+			}
+		}
 	}
-}
-
-/* -------- Replication -------- */
-
-void AFootballer::GetLifetimeReplicatedProps(TArray< FLifetimeProperty >& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	// Uncomment when needed:
-	// DOREPLIFETIME(AFootballer, Team);
-	// DOREPLIFETIME(AFootballer, bHasBall);
-	// DOREPLIFETIME(AFootballer, bIsGoalkeeper);
-	// DOREPLIFETIME(AFootballer, DesiredMoveWorld);
-	// DOREPLIFETIME(AFootballer, DesiredSprint);
 }

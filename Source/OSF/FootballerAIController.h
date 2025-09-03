@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "AIController.h"
-#include "Footballer.h"                        // UHT needs the real type here
 #include "FootballerAIController.generated.h"
 
 UCLASS()
@@ -13,22 +12,17 @@ class OSF_API AFootballerAIController : public AAIController
 public:
 	AFootballerAIController();
 
-protected:
-	virtual void OnPossess(APawn* InPawn) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+protected:
+	virtual void BeginPlay() override;
+
 private:
-	UPROPERTY()
-	AFootballer* MyP = nullptr;
+	class AFootballer* ControlledFootballer = nullptr;
+	class ABallsack* Ball = nullptr;
+	class ATeamGameState* TeamGameState = nullptr;
 
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float AcceptRadius = 120.f;
-
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float MoveSprint = 0.35f;
-
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float KeeperAcceptRadius = 60.f;
-
-	void DriveToward(const FVector& TargetWorld, float DeltaSeconds, float Accept);
+	FVector ComputeTargetLocation() const;
+	bool IsNearestToBallOnMyTeam() const;
+	FVector ComputeJitter(int32 Seed) const;
 };

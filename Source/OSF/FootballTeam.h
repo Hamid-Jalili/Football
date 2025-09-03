@@ -1,30 +1,52 @@
 #pragma once
 
 #include "CoreMinimal.h"
-// include whatever base header you need here (e.g., #include "GameFramework/Actor.h")
-#include "Footballer.h"              // <-- ADD THIS real include
-#include "FootballTeam.generated.h"  // <-- MUST be the LAST include in the file
+#include "GameFramework/Actor.h"
+#include "FootballTeam.generated.h"
 
-
+UENUM(BlueprintType)
+enum class ETeamState : uint8
+{
+	Attack,
+	Defence
+};
 
 UCLASS()
 class OSF_API AFootballTeam : public AActor
 {
 	GENERATED_BODY()
-	
-public:	
-	// Sets default values for this actor's properties
+
+public:
 	AFootballTeam();
 
-	// Called when the game starts or when spawned
-	virtual void BeginPlay() override;
-	
-	// Called every frame
-	virtual void Tick( float DeltaSeconds ) override;
+	/** 0 = Team A, 1 = Team B */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
+	int32 TeamID = 0;
 
-    TArray<AFootballer*> Footballers;
-    
-    UFUNCTION(BlueprintCallable, Category=Custom)
-    AFootballer* GetClosestFootballerToBall(ABallsack* ball);
-	
+	/** Players belonging to this team (filled by GameMode) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
+	TArray<class AFootballer*> Players;
+
+	/** Current tactical state */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Team")
+	ETeamState TeamState = ETeamState::Defence;
+
+	/** Update state */
+	void SetTeamState(ETeamState NewState);
+
+	/** Anchor for player index (current state) */
+	FVector GetAnchorLocation(int32 PlayerIndex) const;
+
+	/** Direct anchors */
+	FVector GetAttackAnchor(int32 PlayerIndex) const;
+	FVector GetDefenceAnchor(int32 PlayerIndex) const;
+
+protected:
+	virtual void BeginPlay() override;
+
+private:
+	TArray<FVector> AttackFormation;
+	TArray<FVector> DefenceFormation;
+
+	void InitializeFormations();
 };

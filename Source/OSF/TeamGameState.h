@@ -12,30 +12,24 @@ class OSF_API ATeamGameState : public AGameStateBase
 public:
 	ATeamGameState();
 
-	/** Optional: assign goal actors in the level (by reference or tag fallback). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	AActor* HomeGoalActor = nullptr;
+	virtual void Tick(float DeltaSeconds) override;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	AActor* AwayGoalActor = nullptr;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Refs")
+	class ABallsack* Ball = nullptr;
 
-	/** Optional: fixed goal locations if you don't place actors. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	FVector HomeGoalLocation = FVector::ZeroVector;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Refs")
+	TArray<class AFootballTeam*> Teams;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	FVector AwayGoalLocation = FVector::ZeroVector;
+	/** 0 TeamA, 1 TeamB, -1 None */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Possession")
+	int32 PossessingTeamID = -1;
 
-	/** Rectangle for the goalkeeper to patrol (depth and half width). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	float KeeperBoxDepth = 800.f;
+	UFUNCTION(BlueprintCallable, Category = "Possession")
+	int32 GetPossessingTeamID() const { return PossessingTeamID; }
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Field")
-	float KeeperBoxHalfWidth = 900.f;
+protected:
+	virtual void BeginPlay() override;
 
-	UFUNCTION(BlueprintCallable, Category = "Field")
-	FVector GetHomeGoalLocation() const;
-
-	UFUNCTION(BlueprintCallable, Category = "Field")
-	FVector GetAwayGoalLocation() const;
+private:
+	void RefreshTeamsIfEmpty();
 };

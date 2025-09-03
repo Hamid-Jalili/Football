@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
-#include "Footballer.h"                     // UHT needs the real type here
 #include "FootballerController.generated.h"
 
 UCLASS()
@@ -13,29 +12,28 @@ class OSF_API AFootballerController : public APlayerController
 public:
 	AFootballerController();
 
-protected:
-	virtual void OnPossess(APawn* InPawn) override;
 	virtual void SetupInputComponent() override;
+	virtual void Tick(float DeltaSeconds) override;
+
+protected:
+	virtual void BeginPlay() override;
 
 private:
-	UPROPERTY()
-	AFootballer* ControlledFootballer = nullptr;
+	class AFootballer* ControlledFootballer = nullptr;
 
-	// axis state
-	float AxisForward = 0.f;
-	float AxisRight = 0.f;
+	FVector2D MoveInput = FVector2D::ZeroVector;
+	bool bSprint = false;
 
-	UPROPERTY(EditAnywhere, Category = "Input")
-	bool bUseCameraYaw = true;
-
-	// bindings
-	void MoveForward(float Val);
-	void MoveRight(float Val);
+	void MoveForward(float Value);
+	void MoveRight(float Value);
 	void SprintPressed();
 	void SprintReleased();
-	void Shoot();
-	void Pass();
-	void KnockOn();
+	void ShootPressed();
+	void PassPressed();
 
+	/** Switch to nearest teammate to the ball (excluding current). */
+	void SwitchToNearestTeammate();
+
+	/** WASD relative to camera yaw. */
 	FVector BuildDesiredMove() const;
 };

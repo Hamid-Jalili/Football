@@ -1,15 +1,23 @@
 ﻿#include "FootballerController.h"
-#include "Kismet/KismetMathLibrary.h"
+#include "Footballer.h"
+#include "FootballTeam.h"
+#include "TeamGameState.h"
+#include "Ballsack.h"
+
+#include "GameFramework/Pawn.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Kismet/GameplayStatics.h"
 
 AFootballerController::AFootballerController()
 {
+	PrimaryActorTick.bCanEverTick = true;
 	bShowMouseCursor = false;
 }
 
-void AFootballerController::OnPossess(APawn* InPawn)
+void AFootballerController::BeginPlay()
 {
-	Super::OnPossess(InPawn);
-	ControlledFootballer = Cast<AFootballer>(InPawn);
+	Super::BeginPlay();
+	ControlledFootballer = Cast<AFootballer>(GetPawn());
 }
 
 void AFootballerController::SetupInputComponent()
@@ -17,72 +25,117 @@ void AFootballerController::SetupInputComponent()
 	Super::SetupInputComponent();
 	check(InputComponent);
 
-	InputComponent->BindAxis(TEXT("MoveForward"), this, &AFootballerController::MoveForward);
-	InputComponent->BindAxis(TEXT("MoveRight"), this, &AFootballerController::MoveRight);
+	InputComponent->BindAxis("MoveForward", this, &AFootballerController::MoveForward);
+	InputComponent->BindAxis("MoveRight", this, &AFootballerController::MoveRight);
 
-	InputComponent->BindAction(TEXT("Sprint"), IE_Pressed, this, &AFootballerController::SprintPressed);
-	InputComponent->BindAction(TEXT("Sprint"), IE_Released, this, &AFootballerController::SprintReleased);
+	InputComponent->BindAction("Sprint", IE_Pressed, this, &AFootballerController::SprintPressed);
+	InputComponent->BindAction("Sprint", IE_Released, this, &AFootballerController::SprintReleased);
 
-	InputComponent->BindAction(TEXT("Shoot"), IE_Pressed, this, &AFootballerController::Shoot);
-	InputComponent->BindAction(TEXT("Pass"), IE_Pressed, this, &AFootballerController::Pass);
-	InputComponent->BindAction(TEXT("KnockOn"), IE_Pressed, this, &AFootballerController::KnockOn);
+	InputComponent->BindAction("Shoot", IE_Pressed, this, &AFootballerController::ShootPressed);
+	InputComponent->BindAction("Pass", IE_Pressed, this, &AFootballerController::PassPressed);
+
+	// Map this in Project Settings → Input → Action Mappings: "SwitchPlayer" to Tab (or your key)
+	InputComponent->BindAction("SwitchPlayer", IE_Pressed, this, &AFootballerController::SwitchToNearestTeammate);
 }
 
-FVector AFootballerController::BuildDesiredMove() const
+void AFootballerController::Tick(float DeltaSeconds)
 {
-	const float Yaw =
-		(bUseCameraYaw && PlayerCameraManager)
-		? PlayerCameraManager->GetCameraRotation().Yaw
-		: GetControlRotation().Yaw;
+	Super::Tick(DeltaSeconds);
 
-	const FRotator YawRot(0.f, Yaw, 0.f);
-	const FVector CamFwd = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
-	const FVector CamRight = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
-
-	const FVector Desired = (CamFwd * AxisForward) + (CamRight * AxisRight);
-	return FVector(Desired.X, Desired.Y, 0.f);
-}
-
-void AFootballerController::MoveForward(float Val)
-{
-	AxisForward = Val;
+	if (!ControlledFootballer)
+	{
+		ControlledFootballer = Cast<AFootballer>(GetPawn());
+	}
 	if (!ControlledFootballer) return;
-	ControlledFootballer->SetDesiredMovement(BuildDesiredMove());
+
+	const FVector DesiredMove = BuildDesiredMove();
+	ControlledFootballer->SetDesiredSprintStrength(bSprint ? 1.f : 0.f);
+	ControlledFootballer->SetDesiredMovement(DesiredMove);
 }
 
-void AFootballerController::MoveRight(float Val)
+void AFootballerController::MoveForward(float Value)
 {
-	AxisRight = Val;
-	if (!ControlledFootballer) return;
-	ControlledFootballer->SetDesiredMovement(BuildDesiredMove());
+	MoveInput.X = FMath::Clamp(Value, -1.f, 1.f);
+}
+
+void AFootballerController::MoveRight(float Value)
+{
+	MoveInput.Y = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AFootballerController::SprintPressed()
 {
-	if (ControlledFootballer) ControlledFootballer->SetDesiredSprintStrength(1.f);
+	bSprint = true;
 }
 
 void AFootballerController::SprintReleased()
 {
-	if (ControlledFootballer) ControlledFootballer->SetDesiredSprintStrength(0.f);
+	bSprint = false;
 }
 
-void AFootballerController::Shoot()
+void AFootballerController::ShootPressed()
 {
 	if (!ControlledFootballer) return;
-	const FVector Dir = BuildDesiredMove().IsNearlyZero()
-		? GetPawn()->GetActorForwardVector()
-		: BuildDesiredMove().GetSafeNormal();
+
+	const FRotator CamRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
+	const FRotator YawRot(0.f, CamRot.Yaw, 0.f);
+	const FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
 	ControlledFootballer->ShootBall(1.f, Dir);
 }
 
-void AFootballerController::Pass()
+void AFootballerController::PassPressed()
 {
 	if (!ControlledFootballer) return;
-	const FVector Dir = BuildDesiredMove().IsNearlyZero()
-		? GetPawn()->GetActorForwardVector()
-		: BuildDesiredMove().GetSafeNormal();
+
+	const FRotator CamRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
+	const FRotator YawRot(0.f, CamRot.Yaw, 0.f);
+
+	FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
+	if (FMath::Abs(MoveInput.Y) > 0.5f)
+	{
+		Dir = (MoveInput.Y > 0.f)
+			? FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y)
+			: -FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
+	}
 	ControlledFootballer->PassBall(0.75f, Dir);
 }
 
-void AFootballerCon
+void AFootballerController::SwitchToNearestTeammate()
+{
+	if (!ControlledFootballer || !ControlledFootballer->TeamRef) return;
+
+	ABallsack* Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
+	if (!Ball) return;
+
+	const FVector BallLoc = Ball->GetActorLocation();
+	AFootballer* Best = nullptr;
+	float BestDist = TNumericLimits<float>::Max();
+
+	for (AFootballer* Mate : ControlledFootballer->TeamRef->Players)
+	{
+		if (!Mate || Mate == ControlledFootballer) continue;
+		const float D = FVector::DistSquared(Mate->GetActorLocation(), BallLoc);
+		if (D < BestDist)
+		{
+			BestDist = D;
+			Best = Mate;
+		}
+	}
+
+	if (Best)
+	{
+		Possess(Best);
+		ControlledFootballer = Best;
+	}
+}
+
+FVector AFootballerController::BuildDesiredMove() const
+{
+	const FRotator ViewRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
+	const FRotator YawRot(0.f, ViewRot.Yaw, 0.f);
+
+	const FVector Forward = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
+	const FVector Right = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
+
+	return (Forward * MoveInput.X + Right * MoveInput.Y);
+}

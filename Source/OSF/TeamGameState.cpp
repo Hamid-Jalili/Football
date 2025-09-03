@@ -1,52 +1,62 @@
 #include "TeamGameState.h"
 #include "Kismet/GameplayStatics.h"
-#include "Engine/World.h"
+#include "Ballsack.h"
+#include "FootballTeam.h"
 
 ATeamGameState::ATeamGameState()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 }
 
-FVector ATeamGameState::GetHomeGoalLocation() const
+void ATeamGameState::BeginPlay()
 {
-	if (HomeGoalActor)
-	{
-		return HomeGoalActor->GetActorLocation();
-	}
+	Super::BeginPlay();
 
-	// Fallback: look for an actor with tag "HomeGoal"
-	if (const UWorld* W = GetWorld())
-	{
-		TArray<AActor*> Found;
-		UGameplayStatics::GetAllActorsWithTag(const_cast<UWorld*>(W), FName(TEXT("HomeGoal")), Found);
-		if (Found.Num() > 0)
-		{
-			return Found[0]->GetActorLocation();
-		}
-	}
-
-	// Final fallback: configured vector
-	return HomeGoalLocation;
+	Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
+	RefreshTeamsIfEmpty();
 }
 
-FVector ATeamGameState::GetAwayGoalLocation() const
+void ATeamGameState::Tick(float DeltaSeconds)
 {
-	if (AwayGoalActor)
+	Super::Tick(DeltaSeconds);
+
+	if (!Ball)
 	{
-		return AwayGoalActor->GetActorLocation();
+		Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
 	}
 
-	// Fallback: look for an actor with tag "AwayGoal"
-	if (const UWorld* W = GetWorld())
+	const int32 NewPossessing = Ball ? Ball->GetPossessingTeamID() : -1;
+	if (NewPossessing != PossessingTeamID)
 	{
-		TArray<AActor*> Found;
-		UGameplayStatics::GetAllActorsWithTag(const_cast<UWorld*>(W), FName(TEXT("AwayGoal")), Found);
-		if (Found.Num() > 0)
+		PossessingTeamID = NewPossessing;
+
+		for (AFootballTeam* T : Teams)
 		{
-			return Found[0]->GetActorLocation();
+			if (!T) continue;
+			if (PossessingTeamID >= 0 && T->TeamID == PossessingTeamID)
+			{
+				T->SetTeamState(ETeamState::Attack);
+			}
+			else
+			{
+				T->SetTeamState(ETeamState::Defence);
+			}
 		}
 	}
+}
 
-	// Final fallback: configured vector
-	return AwayGoalLocation;
+void ATeamGameState::RefreshTeamsIfEmpty()
+{
+	if (Teams.Num() == 0)
+	{
+		TArray<AActor*> Found;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AFootballTeam::StaticClass(), Found);
+		for (AActor* A : Found)
+		{
+			if (AFootballTeam* T = Cast<AFootballTeam>(A))
+			{
+				Teams.Add(T);
+			}
+		}
+	}
 }

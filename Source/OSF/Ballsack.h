@@ -1,26 +1,38 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/StaticMeshActor.h"   // AStaticMeshActor
+#include "GameFramework/Actor.h"
 #include "Ballsack.generated.h"
 
+/** Ball actor with overlap-based possession tracking */
 UCLASS()
-class OSF_API ABallsack : public AStaticMeshActor
+class OSF_API ABallsack : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	// Sets default values for this actor's properties
 	ABallsack();
 
-	// Called when the game starts or when spawned
+	virtual void Tick(float DeltaTime) override;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Possession")
+	class AFootballer* LastTouchingFootballer = nullptr;
+
+	/** 0 TeamA, 1 TeamB, -1 None */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Possession")
+	int32 PossessingTeamID = -1;
+
+	UFUNCTION(BlueprintCallable, Category = "Possession")
+	int32 GetPossessingTeamID() const { return PossessingTeamID; }
+
+protected:
 	virtual void BeginPlay() override;
 
-	// Called every frame
-	virtual void Tick(float DeltaSeconds) override;
+private:
+	UPROPERTY(VisibleAnywhere, Category = "Collision")
+	class USphereComponent* TouchCollision = nullptr;
 
-	/** Gets the ball for a given world. Call during/after BeginPlay on a map that has a ball. Can be null otherwise. */
-	static ABallsack* GetWorldBall(UWorld* World);
+	UFUNCTION()
+	void OnBallBeginOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 };

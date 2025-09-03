@@ -2,12 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
-#include "Footballer.h"                 // UHT needs the real type in headers that use it
 #include "DefaultGameMode.generated.h"
 
-class AFootballerAIController;
-class APlayerController;
-
+/**
+ * Spawns two teams (11v11 by default), assigns team refs/indexes,
+ * and ensures the local player is possessed (Team A, index 0).
+ */
 UCLASS()
 class OSF_API ADefaultGameMode : public AGameModeBase
 {
@@ -16,29 +16,22 @@ class OSF_API ADefaultGameMode : public AGameModeBase
 public:
 	ADefaultGameMode();
 
-protected:
 	virtual void BeginPlay() override;
-	virtual void PostLogin(APlayerController* NewPlayer) override;
 
-	// Spawn a team in 4-4-2: [0]=GK, [1..4]=DEF, [5..8]=MID, [9..10]=FWD
-	void SpawnTeam(int32 TeamIndex, const FVector& HalfBase, bool bHomeTeam);
-	FVector FormationOffset(int32 RoleIndex, bool bHomeTeam) const;
+protected:
+	/** Character class to spawn for each footballer (usually your BP_Footballer) */
+	UPROPERTY(EditDefaultsOnly, Category = "Setup")
+	TSubclassOf<class AFootballer> FootballerClass;
 
-	// Pawn/AI classes (we try to find BP_Footballer at runtime)
-	UPROPERTY(EditDefaultsOnly, Category = "Teams")
-	TSubclassOf<AFootballer> FootballerClass;
+	/** Team actor class (C++ AFootballTeam or a BP derived from it) */
+	UPROPERTY(EditDefaultsOnly, Category = "Setup")
+	TSubclassOf<class AFootballTeam> TeamClass;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Teams")
-	TSubclassOf<AFootballerAIController> AIControllerClass;
+	/** Players per team (11 for 4-4-2) */
+	UPROPERTY(EditAnywhere, Category = "Setup")
+	int32 PlayersPerTeam;
 
-	// Pitch & spacing
-	UPROPERTY(EditDefaultsOnly, Category = "Teams|Pitch")
-	float PitchHalfLength = 5000.f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Teams|Pitch")
-	float PitchHalfWidth = 3000.f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Teams|Spacing")
-	float LineDepth = 800.f;   // distance between GK/DEF/MID/FWD lines (toward center line)
-
-	UPROPERTY(EditDefaultsOnly, Category
+	/** World X offset between halves; Team B is mirrored on +X side */
+	UPROPERTY(EditAnywhere, Category = "Setup")
+	float PitchHalfLengthOffset;
+};

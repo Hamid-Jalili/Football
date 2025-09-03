@@ -9,14 +9,12 @@ public class OSF : ModuleRules
         PublicDependencyModuleNames.AddRange(new string[]
         {
             "Core", "CoreUObject", "Engine", "InputCore",
-            "AIModule", "GameplayTasks"
+            "AIModule", "NavigationSystem", "GameplayTasks"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "Slate", "SlateCore"
         });
-
-        // No explicit include paths needed if headers are under Source/OSF/ (or /Public)
     }
 }
