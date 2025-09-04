@@ -1,66 +1,54 @@
 #include "FootballTeam.h"
-#include "Footballer.h"
 
-AFootballTeam::AFootballTeam()
+static FVector S_AnchorFromGrid(int32 TeamID, float PitchHalf, int32 Row, int32 Col, bool bAttack)
 {
-	PrimaryActorTick.bCanEverTick = false;
-}
-
-void AFootballTeam::BeginPlay()
-{
-	Super::BeginPlay();
-	InitializeFormations();
-}
-
-void AFootballTeam::SetTeamState(ETeamState NewState)
-{
-	TeamState = NewState;
-}
-
-void AFootballTeam::InitializeFormations()
-{
-	// Index map: 0 GK, 1 LB, 2 LCB, 3 RCB, 4 RB, 5 LM, 6 LCM, 7 RCM, 8 RM, 9 LS, 10 RS
-
-	AttackFormation = {
-		FVector(-4000,   0, 0),   // GK
-		FVector(-3000, -1500, 0), // LB
-		FVector(-3000,  -500, 0), // LCB
-		FVector(-3000,   500, 0), // RCB
-		FVector(-3000,  1500, 0), // RB
-		FVector(-1500, -1200, 0), // LM
-		FVector(-1500,  -400, 0), // LCM
-		FVector(-1500,   400, 0), // RCM
-		FVector(-1500,  1200, 0), // RM
-		FVector(0,  -600, 0),// LS
-		FVector(0,   600, 0) // RS
+	static const float RowX[4] = { -0.92f, -0.60f, -0.20f, 0.20f };
+	static const float ColY[4][4] =
+	{
+		{ 0.f, 0.f, 0.f, 0.f },
+		{ -0.70f, -0.25f, 0.25f, 0.70f },
+		{ -0.80f, -0.30f, 0.30f, 0.80f },
+		{ -0.30f,  0.30f, 0.f,   0.f }
 	};
 
-	DefenceFormation = {
-		FVector(-4500,   0, 0),   // GK
-		FVector(-3800, -1600, 0), // LB
-		FVector(-3800,  -500, 0), // LCB
-		FVector(-3800,   500, 0), // RCB
-		FVector(-3800,  1600, 0), // RB
-		FVector(-2200, -1300, 0), // LM
-		FVector(-2200,  -400, 0), // LCM
-		FVector(-2200,   400, 0), // RCM
-		FVector(-2200,  1300, 0), // RM
-		FVector(-800,  -700, 0), // LS
-		FVector(-800,   700, 0)  // RS
-	};
+	float X = RowX[Row] * PitchHalf;
+	float Y = 0.f;
+	if (Row == 1)      Y = ColY[1][Col] * PitchHalf * 0.45f;
+	else if (Row == 2) Y = ColY[2][Col] * PitchHalf * 0.55f;
+	else if (Row == 3) Y = ColY[3][Col] * PitchHalf * 0.30f;
+
+	if (TeamID == 1) X = -X;
+	if (bAttack)
+	{
+		const float Push = (TeamID == 0 ? 1.f : -1.f) * PitchHalf * 0.08f;
+		X += Push;
+	}
+	return FVector(X, Y, 0.f);
 }
 
-FVector AFootballTeam::GetAnchorLocation(int32 PlayerIndex) const
+FVector AFootballTeam::BaseAnchor(int32 TeamID, float PitchHalf, int32 PlayerIndex, bool bAttack)
 {
-	return (TeamState == ETeamState::Attack) ? GetAttackAnchor(PlayerIndex) : GetDefenceAnchor(PlayerIndex);
+	if (PlayerIndex == 0) return S_AnchorFromGrid(TeamID, PitchHalf, 0, 0, bAttack);
+	if (PlayerIndex >= 1 && PlayerIndex <= 4) return S_AnchorFromGrid(TeamID, PitchHalf, 1, PlayerIndex - 1, bAttack);
+	if (PlayerIndex >= 5 && PlayerIndex <= 8) return S_AnchorFromGrid(TeamID, PitchHalf, 2, PlayerIndex - 5, bAttack);
+	return S_AnchorFromGrid(TeamID, PitchHalf, 3, PlayerIndex - 9, bAttack);
 }
 
-FVector AFootballTeam::GetAttackAnchor(int32 PlayerIndex) const
+FVector AFootballTeam::GetAnchor(bool bAttacking, int32 PlayerIndex, const FVector& BallWorld) const
 {
-	return AttackFormation.IsValidIndex(PlayerIndex) ? AttackFormation[PlayerIndex] : FVector::ZeroVector;
-}
+	FVector A = BaseAnchor(TeamID, PitchHalfLength, PlayerIndex, bAttacking);
 
-FVector AFootballTeam::GetDefenceAnchor(int32 PlayerIndex) const
-{
-	return DefenceFormation.IsValidIndex(PlayerIndex) ? DefenceFormation[PlayerIndex] : FVector::ZeroVector;
+	// Light “activity” based on ball position: players nearer the ball are nudged more.
+	const float PitchHalf = PitchHalfLength;
+	const float NormX = FMath::Clamp(BallWorld.X / (PitchHalf * 1.2f), -1.f, 1.f);
+	const float NormY = FMath::Clamp(BallWorld.Y / (PitchHalf * 0.9f), -1.f, 1.f);
+	const float Prox = 1.f - FMath::Clamp((FVector(A.X, A.Y, 0) - FVector(BallWorld.X, BallWorld.Y, 0)).Size() / (PitchHalf * 1.5f), 0.f, 1.f);
+
+	const float Strafe = 350.f * Prox * NormY;                                     // drift laterally with ball
+	float Push = 300.f * Prox * (TeamID == 0 ? 1.f : -1.f) * NormX;                  // drift forward/back with ball
+	if (!bAttacking) Push *= -0.65f;                                               // pull deeper in defence
+
+	A.Y += Strafe;
+	A.X += Push;
+	return A;
 }

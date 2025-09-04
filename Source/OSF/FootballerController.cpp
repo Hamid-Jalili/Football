@@ -1,9 +1,7 @@
 ﻿#include "FootballerController.h"
 #include "Footballer.h"
-#include "FootballTeam.h"
-#include "TeamGameState.h"
-#include "Ballsack.h"
-
+#include "FootballTeam.h"          // <-- for TeamRef and Players array
+#include "Ballsack.h"              // <-- for ABallsack
 #include "GameFramework/Pawn.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Kismet/GameplayStatics.h"
@@ -34,7 +32,6 @@ void AFootballerController::SetupInputComponent()
 	InputComponent->BindAction("Shoot", IE_Pressed, this, &AFootballerController::ShootPressed);
 	InputComponent->BindAction("Pass", IE_Pressed, this, &AFootballerController::PassPressed);
 
-	// Map this in Project Settings → Input → Action Mappings: "SwitchPlayer" to Tab (or your key)
 	InputComponent->BindAction("SwitchPlayer", IE_Pressed, this, &AFootballerController::SwitchToNearestTeammate);
 }
 
@@ -77,9 +74,10 @@ void AFootballerController::ShootPressed()
 {
 	if (!ControlledFootballer) return;
 
-	const FRotator CamRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
-	const FRotator YawRot(0.f, CamRot.Yaw, 0.f);
-	const FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
+	// Shoot straight ahead in the player's facing direction.
+	FVector Dir = ControlledFootballer->GetActorForwardVector();
+	Dir.Z = 0.f;
+	Dir.Normalize();
 	ControlledFootballer->ShootBall(1.f, Dir);
 }
 
@@ -87,15 +85,14 @@ void AFootballerController::PassPressed()
 {
 	if (!ControlledFootballer) return;
 
-	const FRotator CamRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
-	const FRotator YawRot(0.f, CamRot.Yaw, 0.f);
+	// Default pass forward; if strong lateral input, pass sideways relative to player.
+	const FVector Fwd = ControlledFootballer->GetActorForwardVector().GetSafeNormal2D();
+	const FVector Right = ControlledFootballer->GetActorRightVector().GetSafeNormal2D();
 
-	FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
+	FVector Dir = Fwd;
 	if (FMath::Abs(MoveInput.Y) > 0.5f)
 	{
-		Dir = (MoveInput.Y > 0.f)
-			? FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y)
-			: -FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
+		Dir = (MoveInput.Y > 0.f) ? Right : -Right;
 	}
 	ControlledFootballer->PassBall(0.75f, Dir);
 }
@@ -131,11 +128,11 @@ void AFootballerController::SwitchToNearestTeammate()
 
 FVector AFootballerController::BuildDesiredMove() const
 {
+	// Move relative to camera yaw so WASD is screen-aligned.
 	const FRotator ViewRot = PlayerCameraManager ? PlayerCameraManager->GetCameraRotation() : GetControlRotation();
 	const FRotator YawRot(0.f, ViewRot.Yaw, 0.f);
 
 	const FVector Forward = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
 	const FVector Right = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
-
 	return (Forward * MoveInput.X + Right * MoveInput.Y);
 }
