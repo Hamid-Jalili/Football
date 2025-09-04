@@ -1,57 +1,56 @@
 #include "TeamGameState.h"
-#include "Ballsack.h"                                // must include for Cast<ABallsack> and members
 #include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
-#include "Components/PrimitiveComponent.h"
-#include "GameFramework/Actor.h"
+#include "Ballsack.h"
 
-ATeamGameState::ATeamGameState() {}
-
-ABallsack* ATeamGameState::GetBall() const
+ATeamGameState::ATeamGameState()
 {
-	UWorld* W = GetWorld();
-	if (!W) return nullptr;
-
-	UClass* UseClass = BallClass ? *BallClass
-		: StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C"));
-
-	if (!UseClass) return nullptr;
-
-	return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(W, UseClass));
+    PrimaryActorTick.bCanEverTick = false;
 }
 
-void ATeamGameState::ResetBallToCentre() const
+void ATeamGameState::BeginPlay()
 {
-	if (ABallsack* Ball = const_cast<ATeamGameState*>(this)->GetBall())
-	{
-		const FVector Centre(0.f, 0.f, 100.f);
-		Ball->SetActorLocation(Centre, false, nullptr, ETeleportType::TeleportPhysics);
-
-		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
-		{
-			Prim->SetPhysicsLinearVelocity(FVector::ZeroVector);
-			Prim->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-		}
-	}
+    Super::BeginPlay();
 }
 
-void ATeamGameState::HandleGoal(int32 /*ScoringTeamID*/, bool /*bRightGoal*/)
+static ABallsack* FindBall(UWorld* W, TSubclassOf<AActor> BallClass)
 {
-	// Extend with score keeping / kick-off logic as needed
-	ResetBallToCentre();
+    if (!W) return nullptr;
+
+    // If BallClass isn't set in BP, try to auto-load your BP_Ball
+    if (!*BallClass)
+    {
+        BallClass = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C"));
+    }
+
+    AActor* Found = UGameplayStatics::GetActorOfClass(W, BallClass);
+    return Cast<ABallsack>(Found);
+}
+
+void ATeamGameState::ResetBallToCentre()
+{
+    UWorld* W = GetWorld();
+    if (ABallsack* Ball = FindBall(W, BallClass))
+    {
+        const FVector Centre(0.f, 0.f, 105.f);
+        Ball->SetActorLocation(Centre, false, nullptr, ETeleportType::TeleportPhysics);
+        PossessingTeamID = -1;
+    }
+}
+
+void ATeamGameState::HandleGoal(int32 ScoringTeamID, bool bRightGoal)
+{
+    // You can extend this with score tracking per team if you already have it.
+    ResetBallToCentre();
+    PossessingTeamID = -1;
 }
 
 FVector ATeamGameState::GetBallLocationSafe(const UObject* WorldContext)
 {
-	const UWorld* W = WorldContext ? WorldContext->GetWorld() : nullptr;
-	if (!W) return FVector::ZeroVector;
-
-	UClass* BallBP = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C"));
-	if (!BallBP) return FVector::ZeroVector;
-
-	if (AActor* Found = UGameplayStatics::GetActorOfClass(const_cast<UWorld*>(W), BallBP))
-	{
-		return Found->GetActorLocation();
-	}
-	return FVector::ZeroVector;
+    UWorld* W = WorldContext ? WorldContext->GetWorld() : nullptr;
+    if (ABallsack* Ball = FindBall(W, TSubclassOf<AActor>()))
+    {
+        return Ball->GetActorLocation();
+    }
+    return FVector::ZeroVector;
 }

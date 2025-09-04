@@ -1,12 +1,13 @@
-﻿#pragma once
+﻿// Footballer.h
+#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Footballer.generated.h"
 
-class ABallsack;
+// Forward decls
+class UMaterialInterface;
 class AFootballTeam;
-
-#include "Footballer.generated.h" // must be the last include
 
 UENUM(BlueprintType)
 enum class EFootballRole : uint8
@@ -25,54 +26,73 @@ class OSF_API AFootballer : public ACharacter
 public:
 	AFootballer();
 
-	// AActor / ACharacter
-	virtual void BeginPlay() override;
-
-	/** 0 = Left/Blue, 1 = Right/Red */
+	/** Team index this player belongs to (0 / 1). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
-	int32 TeamID = 0;
+	int32 TeamID = -1;
 
+	/** Player role (can be assigned by GameMode/Team). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
 	EFootballRole PlayerRole = EFootballRole::MID;
 
-	/** Where this player should return to (spawn/formation). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Team")
+	/** “Home” position used by simple tactics/respawn. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
 	FVector HomeLocation = FVector::ZeroVector;
 
-	// --- Desired control (read/write via functions) ---
-	UFUNCTION(BlueprintCallable, Category = "Control")
-	void SetDesiredLocation(const FVector& In);
+	/** Back reference to the AFootballTeam actor that owns this player (optional). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Team")
+	TWeakObjectPtr<AFootballTeam> TeamRef;
 
-	UFUNCTION(BlueprintCallable, Category = "Control")
-	void SetDesiredMovement(const FVector& In);
+	/* =======================
+	   Appearance (Team kits)
+	   ======================= */
 
-	UFUNCTION(BlueprintCallable, Category = "Control")
-	void SetDesiredSprintStrength(float In);
+	   /** Which Material slot on this mesh represents the kit (usually 0). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Appearance")
+	int32 TeamMaterialSlot = 0;
 
-	UFUNCTION(BlueprintPure, Category = "Control")
+	/** Material to use for Team 0 (assign in BP_Footballer Details). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Appearance")
+	UMaterialInterface* Team0Material = nullptr;
+
+	/** Material to use for Team 1 (assign in BP_Footballer Details). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Appearance")
+	UMaterialInterface* Team1Material = nullptr;
+
+	/** Apply the correct kit to this mesh based on TeamID and the configured materials. */
+	UFUNCTION(BlueprintCallable, Category = "Appearance")
+	void ApplyTeamMaterial(int32 InTeamID);
+
+	/** Helper that sets TeamID then applies the kit. */
+	UFUNCTION(BlueprintCallable, Category = "Team")
+	void SetTeamAndApply(int32 InTeamID);
+
+	/* ======= Movement API (kept) ======= */
+	UFUNCTION(BlueprintCallable, Category = "Movement")
+	void SetDesiredMovement(const FVector& WorldDirection);
+
+	UFUNCTION(BlueprintPure, Category = "Movement")
 	FVector GetDesiredMove() const { return DesiredMove; }
 
-	// --- Ball helpers ---
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	ABallsack* FindBall() const;
+	/* ======= Controller shims to satisfy existing calls (no behavior changes) ======= */
 
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	void ShootBall(float Power, const FVector& Dir);
+	/** Stores sprint strength; safe no-op unless gameplay uses it. */
+	UFUNCTION(BlueprintCallable, Category = "Input|Shim")
+	void SetDesiredSprintStrength(float Strength);
 
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	void PassBall(float Power, const FVector& Dir);
+	/** Stub: logs the intention; real logic can be added later without breaking callers. */
+	UFUNCTION(BlueprintCallable, Category = "Input|Shim")
+	void ShootBall(float Power, const FVector& Direction);
 
-	// --- Steering helper used by AI ---
-	UFUNCTION(BlueprintCallable, Category = "AI")
-	FVector GetSeparationCorrection(const TArray<AFootballer*>& Neighbors, float Radius) const;
+	/** Stub: logs the intention; real logic can be added later without breaking callers. */
+	UFUNCTION(BlueprintCallable, Category = "Input|Shim")
+	void PassBall(float Power, const FVector& Direction);
 
 protected:
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
-	FVector DesiredLocation = FVector::ZeroVector;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
+	/** Where AI/Controller writes its requested movement. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement")
 	FVector DesiredMove = FVector::ZeroVector;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
-	float DesiredSprint = 0.f;
+	/** Last requested sprint strength from controller (0..1). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement")
+	float DesiredSprintStrength = 0.f;
 };

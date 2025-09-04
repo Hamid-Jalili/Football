@@ -5,35 +5,36 @@
 #include "TeamGameState.generated.h"
 
 class ABallsack;
+class AFootballTeam;
 
-/**
- * Holds game-wide helpers/state. Minimal but includes the methods referenced by UHT.
- */
 UCLASS()
 class OSF_API ATeamGameState : public AGameStateBase
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	ATeamGameState();
+    ATeamGameState();
 
-	/** Optional override for the ball blueprint/class. If unset, we load /Game/BP_Ball.BP_Ball_C */
-	UPROPERTY(EditDefaultsOnly, Category = "Ball")
-	TSubclassOf<AActor> BallClass;
+    // Ball class (BP_Ball) – if not set, we’ll try to load /Game/BP_Ball.BP_Ball_C
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ball")
+    TSubclassOf<AActor> BallClass;
 
-	/** Return the ball actor if found (using BallClass or default path) */
-	UFUNCTION(BlueprintPure, Category = "Ball")
-	ABallsack* GetBall() const;
+    // Which team currently has the ball; -1 = none
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Possession")
+    int32 PossessingTeamID = -1;
 
-	/** Move ball to centre spot and stop its motion */
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	void ResetBallToCentre() const;
+    // Reset ball to centre spot and clear possession
+    UFUNCTION(BlueprintCallable, Category = "Ball")
+    void ResetBallToCentre();
 
-	/** Basic goal handler – currently just recentres the ball. Extend as needed. */
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	void HandleGoal(int32 ScoringTeamID, bool bRightGoal);
+    // Handle scoring and reset ball; bRightGoal is kept for your logic
+    UFUNCTION(BlueprintCallable, Category = "Goals")
+    void HandleGoal(int32 ScoringTeamID, bool bRightGoal);
 
-	/** Quick world-agnostic way to read ball location for UI/AI */
-	UFUNCTION(BlueprintCallable, Category = "Ball")
-	static FVector GetBallLocationSafe(const UObject* WorldContext);
+    // Safe getter for ball location (usable from anywhere)
+    UFUNCTION(BlueprintCallable, Category = "Ball")
+    static FVector GetBallLocationSafe(const UObject* WorldContext);
+
+protected:
+    virtual void BeginPlay() override;
 };

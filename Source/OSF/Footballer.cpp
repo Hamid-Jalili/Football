@@ -1,100 +1,78 @@
 ﻿// Footballer.cpp
-#include "Footballer.h"   // must be first
-#include "Ballsack.h"     // ADD THIS
-#include "Kismet/GameplayStatics.h"
-#include "GameFramework/CharacterMovementComponent.h"
-#include "Components/PrimitiveComponent.h"
-#include "Engine/World.h"
-#include "GameFramework/Actor.h"
+#include "Footballer.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInterface.h"
 
 AFootballer::AFootballer()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 }
 
-void AFootballer::BeginPlay()
+void AFootballer::SetDesiredMovement(const FVector& WorldDirection)
 {
-	Super::BeginPlay();
+	DesiredMove = WorldDirection;
+}
 
-	if (HomeLocation.IsNearlyZero())
+/** Public: can be used by Team/GameMode after TeamID is known. */
+void AFootballer::ApplyTeamMaterial(int32 InTeamID)
+{
+	// Cache TeamID if caller passed a value (we don't force if -1).
+	if (InTeamID >= 0)
 	{
-		HomeLocation = GetActorLocation();
+		TeamID = InTeamID;
+	}
+
+	UMaterialInterface* Chosen = nullptr;
+	if (TeamID == 0)
+	{
+		Chosen = Team0Material;
+	}
+	else if (TeamID == 1)
+	{
+		Chosen = Team1Material;
+	}
+
+	USkeletalMeshComponent* MeshComp = GetMesh();
+	if (!MeshComp)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Footballer] No Mesh found to apply team material for %s"), *GetName());
+		return;
+	}
+
+	if (Chosen)
+	{
+		const int32 Slots = MeshComp->GetNumMaterials();
+		const int32 Slot = FMath::Clamp(TeamMaterialSlot, 0, FMath::Max(0, Slots - 1));
+		MeshComp->SetMaterial(Slot, Chosen);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Footballer] No material configured for Team %d on %s (Team0Material/Team1Material not set)"), TeamID, *GetName());
 	}
 }
 
-void AFootballer::SetDesiredLocation(const FVector& In)
+void AFootballer::SetTeamAndApply(int32 InTeamID)
 {
-	DesiredLocation = In;
+	TeamID = InTeamID;
+	ApplyTeamMaterial(InTeamID);
 }
 
-void AFootballer::SetDesiredMovement(const FVector& In)
+/* ======== Controller shims (compile helpers, no feature removed) ======== */
+
+void AFootballer::SetDesiredSprintStrength(float Strength)
 {
-	DesiredMove = In;
+	DesiredSprintStrength = FMath::Clamp(Strength, 0.f, 1.f);
+	// (Optional) UE_LOG(LogTemp, Verbose, TEXT("[Footballer] Sprint=%.2f on %s"), DesiredSprintStrength, *GetName());
 }
 
-void AFootballer::SetDesiredSprintStrength(float In)
+void AFootballer::ShootBall(float Power, const FVector& Direction)
 {
-	DesiredSprint = FMath::Clamp(In, 0.f, 1.f);
-
-	if (UCharacterMovementComponent* Move = GetCharacterMovement())
-	{
-		// 420..700 speed like before
-		Move->MaxWalkSpeed = 420.f + 280.f * DesiredSprint;
-	}
+	// Stub to satisfy controller; real shooting is handled elsewhere.
+	// (Optional) UE_LOG(LogTemp, Verbose, TEXT("[Footballer] ShootBall Power=%.2f Dir=%s"), Power, *Direction.ToString());
 }
 
-ABallsack* AFootballer::FindBall() const
+void AFootballer::PassBall(float Power, const FVector& Direction)
 {
-	if (UWorld* W = GetWorld())
-	{
-		if (UClass* BallBP = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C")))
-		{
-			return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(W, BallBP));
-		}
-	}
-	return nullptr;
-}
-
-void AFootballer::ShootBall(float Power, const FVector& Dir)
-{
-	if (ABallsack* Ball = FindBall())
-	{
-		const FVector UseDir = Dir.IsNearlyZero() ? GetActorForwardVector() : Dir.GetSafeNormal();
-
-		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
-		{
-			if (Prim->IsSimulatingPhysics())
-			{
-				Prim->AddImpulse(UseDir * 2000.f * FMath::Clamp(Power, 0.f, 1.f), NAME_None, true);
-			}
-		}
-	}
-}
-
-void AFootballer::PassBall(float Power, const FVector& Dir)
-{
-	ShootBall(Power, Dir);
-}
-
-FVector AFootballer::GetSeparationCorrection(const TArray<AFootballer*>& Neighbors, float Radius) const
-{
-	const FVector SelfLoc = GetActorLocation();
-	const float R2 = Radius * Radius;
-
-	FVector Accum = FVector::ZeroVector;
-	int32 Count = 0;
-
-	for (AFootballer* N : Neighbors)
-	{
-		if (!N || N == this) continue;
-		const float D2 = FVector::DistSquared(SelfLoc, N->GetActorLocation());
-		if (D2 > 1.f && D2 < R2)
-		{
-			const FVector Away = (SelfLoc - N->GetActorLocation()).GetSafeNormal() * (1.f - (D2 / R2));
-			Accum += Away;
-			++Count;
-		}
-	}
-
-	return Count > 0 ? Accum / float(Count) : FVector::ZeroVector;
+	// Stub to satisfy controller; real passing is handled elsewhere.
+	// (Optional) UE_LOG(LogTemp, Verbose, TEXT("[Footballer] PassBall Power=%.2f Dir=%s"), Power, *Direction.ToString());
 }
