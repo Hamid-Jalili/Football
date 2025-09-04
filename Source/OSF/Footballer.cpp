@@ -1,173 +1,100 @@
-﻿#include "Footballer.h"
-#include "FootballTeam.h"
-#include "Ballsack.h"
-
-#include "Components/SkeletalMeshComponent.h"
-#include "Components/PrimitiveComponent.h"
-#include "GameFramework/CharacterMovementComponent.h"
+﻿// Footballer.cpp
+#include "Footballer.h"   // must be first
+#include "Ballsack.h"     // ADD THIS
 #include "Kismet/GameplayStatics.h"
-#include "GameFramework/PlayerController.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
 
 AFootballer::AFootballer()
 {
-	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bCanEverTick = false;
 }
 
 void AFootballer::BeginPlay()
 {
 	Super::BeginPlay();
-	ApplyTeamMaterial();
-}
 
-void AFootballer::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-	UpdateCloseControl(DeltaSeconds);
-}
-
-int32 AFootballer::GetTeamID() const
-{
-	return TeamRef ? TeamRef->TeamID : -1;
-}
-
-void AFootballer::ApplyTeamMaterial()
-{
-	if (!GetMesh()) return;
-
-	UMaterialInterface* Mat = nullptr;
-	if (TeamRef)
+	if (HomeLocation.IsNearlyZero())
 	{
-		Mat = (TeamRef->TeamID == 0) ? TeamAMaterial : TeamBMaterial;
-	}
-	if (!Mat) return;
-
-	const int32 Slots = GetMesh()->GetNumMaterials();
-	for (int32 i = 0; i < Slots; ++i)
-	{
-		GetMesh()->SetMaterial(i, Mat);
+		HomeLocation = GetActorLocation();
 	}
 }
 
-void AFootballer::SetDesiredMovement(const FVector& DesiredMoveWorld)
+void AFootballer::SetDesiredLocation(const FVector& In)
 {
-	LastDesiredMove = DesiredMoveWorld;
+	DesiredLocation = In;
+}
 
-	FVector Dir = DesiredMoveWorld; Dir.Z = 0.f;
-	if (!Dir.IsNearlyZero())
-	{
-		Dir.Normalize();
-		AddMovementInput(Dir, 1.f + DesiredSprintStrength);
-		SetActorRotation(FRotator(0.f, Dir.Rotation().Yaw, 0.f));
-	}
+void AFootballer::SetDesiredMovement(const FVector& In)
+{
+	DesiredMove = In;
+}
+
+void AFootballer::SetDesiredSprintStrength(float In)
+{
+	DesiredSprint = FMath::Clamp(In, 0.f, 1.f);
 
 	if (UCharacterMovementComponent* Move = GetCharacterMovement())
 	{
-		const float BaseSpeed = 420.f, SprintAdd = 280.f;
-		Move->MaxWalkSpeed = BaseSpeed + SprintAdd * FMath::Clamp(DesiredSprintStrength, 0.f, 1.f);
+		// 420..700 speed like before
+		Move->MaxWalkSpeed = 420.f + 280.f * DesiredSprint;
 	}
-}
-
-void AFootballer::SetDesiredSprintStrength(float InStrength)
-{
-	DesiredSprintStrength = FMath::Clamp(InStrength, 0.f, 1.f);
 }
 
 ABallsack* AFootballer::FindBall() const
 {
-	return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
+	if (UWorld* W = GetWorld())
+	{
+		if (UClass* BallBP = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C")))
+		{
+			return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(W, BallBP));
+		}
+	}
+	return nullptr;
 }
 
-void AFootballer::DisableCloseControl(float Duration)
-{
-	CloseControlReenableTime = GetWorld()->GetTimeSeconds() + FMath::Max(0.f, Duration);
-}
-
-void AFootballer::ShootBall(float Power, const FVector& DirectionWorld)
+void AFootballer::ShootBall(float Power, const FVector& Dir)
 {
 	if (ABallsack* Ball = FindBall())
 	{
-		const FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
-		if (ToBall.SizeSquared2D() < FMath::Square(250.f))
+		const FVector UseDir = Dir.IsNearlyZero() ? GetActorForwardVector() : Dir.GetSafeNormal();
+
+		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
 		{
-			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
+			if (Prim->IsSimulatingPhysics())
 			{
-				Prim->AddImpulse(DirectionWorld.GetSafeNormal() * FMath::Clamp(Power, 0.f, 1.f) * 2200.f, NAME_None, true);
-				DisableCloseControl(0.5f);
+				Prim->AddImpulse(UseDir * 2000.f * FMath::Clamp(Power, 0.f, 1.f), NAME_None, true);
 			}
 		}
 	}
 }
 
-void AFootballer::PassBall(float Power, const FVector& DirectionWorld)
+void AFootballer::PassBall(float Power, const FVector& Dir)
 {
-	if (ABallsack* Ball = FindBall())
+	ShootBall(Power, Dir);
+}
+
+FVector AFootballer::GetSeparationCorrection(const TArray<AFootballer*>& Neighbors, float Radius) const
+{
+	const FVector SelfLoc = GetActorLocation();
+	const float R2 = Radius * Radius;
+
+	FVector Accum = FVector::ZeroVector;
+	int32 Count = 0;
+
+	for (AFootballer* N : Neighbors)
 	{
-		const FVector ToBall = Ball->GetActorLocation() - GetActorLocation();
-		if (ToBall.SizeSquared2D() < FMath::Square(250.f))
+		if (!N || N == this) continue;
+		const float D2 = FVector::DistSquared(SelfLoc, N->GetActorLocation());
+		if (D2 > 1.f && D2 < R2)
 		{
-			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
-			{
-				Prim->AddImpulse(DirectionWorld.GetSafeNormal() * FMath::Clamp(Power, 0.f, 1.f) * 1400.f, NAME_None, true);
-				DisableCloseControl(0.3f);
-			}
+			const FVector Away = (SelfLoc - N->GetActorLocation()).GetSafeNormal() * (1.f - (D2 / R2));
+			Accum += Away;
+			++Count;
 		}
 	}
-}
 
-void AFootballer::UpdateCloseControl(float DeltaSeconds)
-{
-	const bool bHumanControlled = Cast<APlayerController>(GetController()) != nullptr;
-	if (!bHumanControlled) return;
-	if (GetWorld()->GetTimeSeconds() < CloseControlReenableTime) return;
-
-	ABallsack* Ball = FindBall(); if (!Ball) return;
-	UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()); if (!Prim) return;
-
-	const FVector MyLoc = GetActorLocation(), BallLoc = Ball->GetActorLocation();
-	if (FVector::Dist2D(MyLoc, BallLoc) > ControlRadius) return;
-
-	FVector MoveDir = LastDesiredMove; MoveDir.Z = 0.f;
-	if (MoveDir.IsNearlyZero()) MoveDir = GetActorForwardVector();
-	MoveDir = MoveDir.GetSafeNormal();
-
-	const FVector Target = MyLoc + MoveDir * ControlOffsetForward;
-
-	// XY steering, preserve Z
-	const FVector ToTarget = (Target - BallLoc);
-	FVector DesiredVelXY = ToTarget * ControlResponsiveness; DesiredVelXY.Z = 0.f;
-
-	FVector NewVel = Prim->GetPhysicsLinearVelocity();
-	NewVel.X = DesiredVelXY.X; NewVel.Y = DesiredVelXY.Y;
-
-	const float PlanarSpeed = FVector(NewVel.X, NewVel.Y, 0.f).Size();
-	if (PlanarSpeed > MaxBallSpeed)
-	{
-		const FVector Dir = FVector(NewVel.X, NewVel.Y, 0.f).GetSafeNormal();
-		NewVel.X = Dir.X * MaxBallSpeed; NewVel.Y = Dir.Y * MaxBallSpeed;
-	}
-
-	Prim->SetPhysicsLinearVelocity(NewVel);
-	Prim->AddForce(FVector(0.f, 0.f, -GroundAdhesion), NAME_None, true);
-}
-
-/* ------- Temporary target helpers --------- */
-void AFootballer::SetTempMoveTarget(const FVector& Location, float DurationSeconds)
-{
-	TempTargetLocation = Location;
-	TempTargetUntilTime = GetWorld()->GetTimeSeconds() + FMath::Max(0.f, DurationSeconds);
-}
-
-bool AFootballer::HasTempMoveTarget() const
-{
-	return GetWorld() && GetWorld()->GetTimeSeconds() < TempTargetUntilTime;
-}
-
-bool AFootballer::GetTempMoveTarget(FVector& Out) const
-{
-	if (HasTempMoveTarget())
-	{
-		Out = TempTargetLocation;
-		return true;
-	}
-	return false;
+	return Count > 0 ? Accum / float(Count) : FVector::ZeroVector;
 }

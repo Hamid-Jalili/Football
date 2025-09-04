@@ -1,58 +1,57 @@
 #include "TeamGameState.h"
-#include "FootballTeam.h"
-#include "Ballsack.h"
+#include "Ballsack.h"                                // must include for Cast<ABallsack> and members
 #include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
+#include "Components/PrimitiveComponent.h"
+#include "GameFramework/Actor.h"
 
-ATeamGameState::ATeamGameState()
+ATeamGameState::ATeamGameState() {}
+
+ABallsack* ATeamGameState::GetBall() const
 {
-	PrimaryActorTick.bCanEverTick = false; // AI controllers drive movement
+	UWorld* W = GetWorld();
+	if (!W) return nullptr;
+
+	UClass* UseClass = BallClass ? *BallClass
+		: StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C"));
+
+	if (!UseClass) return nullptr;
+
+	return Cast<ABallsack>(UGameplayStatics::GetActorOfClass(W, UseClass));
 }
 
-void ATeamGameState::BeginPlay()
+void ATeamGameState::ResetBallToCentre() const
 {
-	Super::BeginPlay();
-}
-
-AFootballTeam* ATeamGameState::GetTeam(int32 TeamID) const
-{
-	return Teams.IsValidIndex(TeamID) ? Teams[TeamID] : nullptr;
-}
-
-void ATeamGameState::ResetBallToCentre()
-{
-	if (!GetWorld()) return;
-
-	if (ABallsack* Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass())))
+	if (ABallsack* Ball = const_cast<ATeamGameState*>(this)->GetBall())
 	{
-		const FVector Start = Ball->GetActorLocation();
-		// Keep current Z to avoid popping; your ABallsack::ResetToCenter should zero velocity inside.
-		const FVector Centre(Start.X - Start.X, Start.Y - Start.Y, Start.Z);
-		// If your ABallsack has ResetToCenter(FVector), call it; otherwise SetActorLocation + zero physics works too.
-		if (Ball->GetClass()->FindFunctionByName(TEXT("ResetToCenter")))
+		const FVector Centre(0.f, 0.f, 100.f);
+		Ball->SetActorLocation(Centre, false, nullptr, ETeleportType::TeleportPhysics);
+
+		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
 		{
-			Ball->ResetToCenter(FVector(0.f, 0.f, Start.Z));
-		}
-		else
-		{
-			Ball->SetActorLocation(FVector(0.f, 0.f, Start.Z), false);
-			if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Ball->GetRootComponent()))
-			{
-				Prim->SetPhysicsLinearVelocity(FVector::ZeroVector);
-				Prim->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-			}
+			Prim->SetPhysicsLinearVelocity(FVector::ZeroVector);
+			Prim->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 		}
 	}
 }
 
-void ATeamGameState::HandleGoal(int32 ScoringTeamID, bool bRightGoal)
+void ATeamGameState::HandleGoal(int32 /*ScoringTeamID*/, bool /*bRightGoal*/)
 {
-	// 1) Reset ball to centre, stop its motion
+	// Extend with score keeping / kick-off logic as needed
 	ResetBallToCentre();
+}
 
-	// 2) Possession for kickoff goes to the conceding team
-	const int32 ConcedingTeam = (ScoringTeamID == 0) ? 1 : 0;
-	SetPossessingTeamID(ConcedingTeam);
+FVector ATeamGameState::GetBallLocationSafe(const UObject* WorldContext)
+{
+	const UWorld* W = WorldContext ? WorldContext->GetWorld() : nullptr;
+	if (!W) return FVector::ZeroVector;
 
-	// 3) Do not teleport players — AI controllers will walk/run back to anchors automatically.
-	//    (Anchors depend on GetPossessingTeamID(), so the shape flips for kickoff.)
+	UClass* BallBP = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Ball.BP_Ball_C"));
+	if (!BallBP) return FVector::ZeroVector;
+
+	if (AActor* Found = UGameplayStatics::GetActorOfClass(const_cast<UWorld*>(W), BallBP))
+	{
+		return Found->GetActorLocation();
+	}
+	return FVector::ZeroVector;
 }

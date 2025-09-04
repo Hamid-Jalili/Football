@@ -2,7 +2,20 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
-#include "Footballer.generated.h"
+
+class ABallsack;
+class AFootballTeam;
+
+#include "Footballer.generated.h" // must be the last include
+
+UENUM(BlueprintType)
+enum class EFootballRole : uint8
+{
+	GK  UMETA(DisplayName = "Goalkeeper"),
+	DEF UMETA(DisplayName = "Defender"),
+	MID UMETA(DisplayName = "Midfielder"),
+	FWD UMETA(DisplayName = "Forward")
+};
 
 UCLASS()
 class OSF_API AFootballer : public ACharacter
@@ -12,82 +25,54 @@ class OSF_API AFootballer : public ACharacter
 public:
 	AFootballer();
 
+	// AActor / ACharacter
 	virtual void BeginPlay() override;
-	virtual void Tick(float DeltaSeconds) override;
 
-	/** Index 0..10 in formation */
+	/** 0 = Left/Blue, 1 = Right/Red */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
-	int32 PlayerIndex = 0;
+	int32 TeamID = 0;
 
-	/** Team reference */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Team")
-	class AFootballTeam* TeamRef = nullptr;
+	EFootballRole PlayerRole = EFootballRole::MID;
 
-	int32 GetTeamID() const;
+	/** Where this player should return to (spawn/formation). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Team")
+	FVector HomeLocation = FVector::ZeroVector;
 
-	/** Control API from controller */
-	UFUNCTION(BlueprintCallable, Category = "Input")
-	void SetDesiredMovement(const FVector& DesiredMoveWorld);
+	// --- Desired control (read/write via functions) ---
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	void SetDesiredLocation(const FVector& In);
 
-	UFUNCTION(BlueprintCallable, Category = "Input")
-	void SetDesiredSprintStrength(float InStrength);
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	void SetDesiredMovement(const FVector& In);
 
-	UFUNCTION(BlueprintCallable, Category = "Actions")
-	void ShootBall(float Power, const FVector& DirectionWorld);
+	UFUNCTION(BlueprintCallable, Category = "Control")
+	void SetDesiredSprintStrength(float In);
 
-	UFUNCTION(BlueprintCallable, Category = "Actions")
-	void PassBall(float Power, const FVector& DirectionWorld);
+	UFUNCTION(BlueprintPure, Category = "Control")
+	FVector GetDesiredMove() const { return DesiredMove; }
 
-	/** Called by GameMode after TeamRef is set to apply correct kit */
-	UFUNCTION(BlueprintCallable, Category = "Appearance")
-	void ApplyTeamMaterial();
+	// --- Ball helpers ---
+	UFUNCTION(BlueprintCallable, Category = "Ball")
+	ABallsack* FindBall() const;
 
-	/** --- Reset/Kickoff support ---------------------------- */
+	UFUNCTION(BlueprintCallable, Category = "Ball")
+	void ShootBall(float Power, const FVector& Dir);
 
-	/** For X seconds, AI will strongly prefer this location (run back to spot) */
-	void SetTempMoveTarget(const FVector& Location, float DurationSeconds);
+	UFUNCTION(BlueprintCallable, Category = "Ball")
+	void PassBall(float Power, const FVector& Dir);
 
-	/** Does this player currently have a temporary target? */
-	bool HasTempMoveTarget() const;
-
-	/** If there is a temp target, returns it and true. */
-	bool GetTempMoveTarget(FVector& Out) const;
+	// --- Steering helper used by AI ---
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	FVector GetSeparationCorrection(const TArray<AFootballer*>& Neighbors, float Radius) const;
 
 protected:
-	UPROPERTY(EditDefaultsOnly, Category = "Appearance")
-	class UMaterialInterface* TeamAMaterial = nullptr;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
+	FVector DesiredLocation = FVector::ZeroVector;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Appearance")
-	class UMaterialInterface* TeamBMaterial = nullptr;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
+	FVector DesiredMove = FVector::ZeroVector;
 
-private:
-	// movement intent (updated by controller)
-	FVector LastDesiredMove = FVector::ZeroVector;
-	float   DesiredSprintStrength = 0.f;
-
-	// Close-control (directional dribble)
-	UPROPERTY(EditAnywhere, Category = "Control")
-	float ControlRadius = 150.f;
-
-	UPROPERTY(EditAnywhere, Category = "Control")
-	float ControlOffsetForward = 95.f;
-
-	UPROPERTY(EditAnywhere, Category = "Control")
-	float ControlResponsiveness = 24.f;
-
-	UPROPERTY(EditAnywhere, Category = "Control")
-	float MaxBallSpeed = 1800.f;
-
-	UPROPERTY(EditAnywhere, Category = "Control")
-	float GroundAdhesion = 50.f;
-
-	float CloseControlReenableTime = 0.f;
-
-	// --- Temporary target state (used by resets/kickoff) ---
-	FVector TempTargetLocation = FVector::ZeroVector;
-	float   TempTargetUntilTime = 0.f;
-
-	class ABallsack* FindBall() const;
-	void UpdateCloseControl(float DeltaSeconds);
-	void DisableCloseControl(float Duration);
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Control")
+	float DesiredSprint = 0.f;
 };

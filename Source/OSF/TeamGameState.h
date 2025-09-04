@@ -1,45 +1,39 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameStateBase.h"
 #include "TeamGameState.generated.h"
 
+class ABallsack;
+
+/**
+ * Holds game-wide helpers/state. Minimal but includes the methods referenced by UHT.
+ */
 UCLASS()
 class OSF_API ATeamGameState : public AGameStateBase
 {
 	GENERATED_BODY()
+
 public:
 	ATeamGameState();
 
-	/** 0 = Left/Blue, 1 = Right/Red; -1 = none/unknown */
-	UFUNCTION(BlueprintCallable, Category = "Teams")
-	int32 GetPossessingTeamID() const { return PossessingTeamID; }
+	/** Optional override for the ball blueprint/class. If unset, we load /Game/BP_Ball.BP_Ball_C */
+	UPROPERTY(EditDefaultsOnly, Category = "Ball")
+	TSubclassOf<AActor> BallClass;
 
-	UFUNCTION(BlueprintCallable, Category = "Teams")
-	void SetPossessingTeamID(int32 NewID) { PossessingTeamID = NewID; }
+	/** Return the ball actor if found (using BallClass or default path) */
+	UFUNCTION(BlueprintPure, Category = "Ball")
+	ABallsack* GetBall() const;
 
-	/** All teams present in the match (index with TeamID when possible). */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Teams")
-	TArray<class AFootballTeam*> Teams;
+	/** Move ball to centre spot and stop its motion */
+	UFUNCTION(BlueprintCallable, Category = "Ball")
+	void ResetBallToCentre() const;
 
-	/** Convenience: returns nullptr if TeamID out of range. */
-	UFUNCTION(BlueprintCallable, Category = "Teams")
-	class AFootballTeam* GetTeam(int32 TeamID) const;
-
-	/**
-	 * Called by BP_Goal on net overlap.
-	 * @param ScoringTeamID  Team that scored (0/1)
-	 * @param bRightGoal     Which goal volume fired (for debugging/telemetry only)
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Gameplay")
+	/** Basic goal handler – currently just recentres the ball. Extend as needed. */
+	UFUNCTION(BlueprintCallable, Category = "Ball")
 	void HandleGoal(int32 ScoringTeamID, bool bRightGoal);
 
-protected:
-	virtual void BeginPlay() override;
-
-private:
-	UPROPERTY()
-	int32 PossessingTeamID = -1;
-
-	void ResetBallToCentre();
+	/** Quick world-agnostic way to read ball location for UI/AI */
+	UFUNCTION(BlueprintCallable, Category = "Ball")
+	static FVector GetBallLocationSafe(const UObject* WorldContext);
 };

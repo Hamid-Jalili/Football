@@ -1,198 +1,190 @@
-﻿#include "DefaultGameMode.h"
-
-#include "TeamGameState.h"
-#include "FootballTeam.h"
-#include "Footballer.h"
-#include "FootballerAIController.h"
-#include "FootballerController.h"
-#include "Ballsack.h"
-
+﻿#include "DefaultGameMode.h"                // must be first
 #include "Kismet/GameplayStatics.h"
-#include "EngineUtils.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"                    // TActorIterator
 #include "GameFramework/PlayerController.h"
+
+#include "Footballer.h"                     // real type & EFootballRole
+#include "FootballTeam.h"
+
+#define LOG(Category, Fmt, ...) UE_LOG(LogTemp, Category, TEXT("[GM] " Fmt), ##__VA_ARGS__)
+
+// --------------------------
 
 ADefaultGameMode::ADefaultGameMode()
 {
-	GameStateClass = ATeamGameState::StaticClass();
-	DefaultPawnClass = nullptr; // we possess a Footballer
-	PlayerControllerClass = AFootballerController::StaticClass();
-	FootballerClass = AFootballer::StaticClass(); // fallback if not set in BP
-}
-
-static FVector AnchorFromGrid(int32 TeamID, float PitchHalf, int32 Row, int32 Col, bool bAttack)
-{
-	static const float RowX[4] = { -0.92f, -0.60f, -0.20f, 0.20f };
-	static const float ColY[4][4] =
-	{
-		{ 0.f, 0.f, 0.f, 0.f },                           // GK
-		{ -0.70f, -0.25f, 0.25f, 0.70f },                 // DEF
-		{ -0.80f, -0.30f, 0.30f, 0.80f },                 // MID
-		{ -0.30f,  0.30f, 0.f,   0.f }                    // FWD (2 used)
-	};
-
-	float X = RowX[Row] * PitchHalf;
-	float Y = 0.f;
-	if (Row == 1)      Y = ColY[1][Col] * PitchHalf * 0.45f;
-	else if (Row == 2) Y = ColY[2][Col] * PitchHalf * 0.55f;
-	else if (Row == 3) Y = ColY[3][Col] * PitchHalf * 0.30f;
-
-	// Mirror for right team
-	if (TeamID == 1) X = -X;
-
-	// Small push toward attack
-	if (bAttack)
-	{
-		const float Push = (TeamID == 0 ? 1.f : -1.f) * PitchHalf * 0.08f;
-		X += Push;
-	}
-
-	return FVector(X, Y, 0.f);
-}
-
-static FVector FormationAnchor(int32 TeamID, float PitchHalf, int32 PlayerIndex, bool bAttack)
-{
-	if (PlayerIndex == 0) return AnchorFromGrid(TeamID, PitchHalf, 0, 0, bAttack); // GK
-	if (PlayerIndex >= 1 && PlayerIndex <= 4) return AnchorFromGrid(TeamID, PitchHalf, 1, PlayerIndex - 1, bAttack);
-	if (PlayerIndex >= 5 && PlayerIndex <= 8) return AnchorFromGrid(TeamID, PitchHalf, 2, PlayerIndex - 5, bAttack);
-	return AnchorFromGrid(TeamID, PitchHalf, 3, PlayerIndex - 9, bAttack);            // 9..10
+	PrimaryActorTick.bCanEverTick = false;
 }
 
 void ADefaultGameMode::BeginPlay()
 {
 	Super::BeginPlay();
-	BuildTeamsFromWorld();
-}
 
-void ADefaultGameMode::BuildTeamsFromWorld()
-{
-	ATeamGameState* TGS = Cast<ATeamGameState>(GameState);
-	if (!TGS) return;
-
-	// Create teams
-	AFootballTeam* TeamA = GetWorld()->SpawnActor<AFootballTeam>();
-	AFootballTeam* TeamB = GetWorld()->SpawnActor<AFootballTeam>();
-	TeamA->TeamID = 0; TeamB->TeamID = 1;
-	TeamA->PitchHalfLength = PitchHalfLength;
-	TeamB->PitchHalfLength = PitchHalfLength;
-
-	// Gather any pre-placed footballers (BP or native)
-	TArray<AFootballer*> All;
-	for (TActorIterator<AFootballer> It(GetWorld()); It; ++It) All.Add(*It);
-
-	// If none, auto-spawn a full 11v11 using FootballerClass
-	if (All.Num() == 0)
+	// Ensure pawn class (auto-load BP_Footballer if not set in BP_GameMode)
+	if (!FootballerClass)
 	{
-		const float z = 100.f;
-		FActorSpawnParameters Params;
-		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-		UClass* SpawnCls = FootballerClass ? *FootballerClass : AFootballer::StaticClass();
-
-		for (int32 i = 0; i < PlayersPerTeam; ++i)
+		if (UClass* Loaded = StaticLoadClass(AActor::StaticClass(), nullptr, TEXT("/Game/BP_Footballer.BP_Footballer_C")))
 		{
-			// Left/Blue
-			{
-				const FVector Pos = FormationAnchor(0, PitchHalfLength, i, true);
-				const FTransform T(FRotator::ZeroRotator, FVector(Pos.X, Pos.Y, z));
-				if (AFootballer* P = GetWorld()->SpawnActor<AFootballer>(SpawnCls, T, Params)) All.Add(P);
-			}
-			// Right/Red
-			{
-				const FVector Pos = FormationAnchor(1, PitchHalfLength, i, true);
-				const FTransform T(FRotator::ZeroRotator, FVector(Pos.X, Pos.Y, z));
-				if (AFootballer* P = GetWorld()->SpawnActor<AFootballer>(SpawnCls, T, Params)) All.Add(P);
-			}
+			FootballerClass = Loaded;
+		}
+		else
+		{
+			LOG(Error, "FootballerClass is null and /Game/BP_Footballer not found. Aborting spawn.");
+			return;
 		}
 	}
 
-	// Deterministic order
-	All.Sort([](const AFootballer& A, const AFootballer& B)
-		{
-			if (A.GetActorLocation().Y == B.GetActorLocation().Y)
-				return A.GetActorLocation().X < B.GetActorLocation().X;
-			return A.GetActorLocation().Y < B.GetActorLocation().Y;
-		});
+	const int32 Count = FMath::Clamp(PlayersPerTeam, 1, 11);
 
-	// Partition by half
-	int32 aIdx = 0, bIdx = 0;
-	for (AFootballer* P : All)
+	AFootballTeam* TeamA = EnsureTeamActor(0);
+	AFootballTeam* TeamB = EnsureTeamActor(1);
+	if (!TeamA || !TeamB)
 	{
-		if (!P) continue;
-		const bool bLeftSide = (P->GetActorLocation().X < 0.f);
-		AFootballTeam* Team = bLeftSide ? TeamA : TeamB;
-
-		P->TeamRef = Team;
-		P->PlayerIndex = bLeftSide ? aIdx++ : bIdx++;
-		Team->Players.Add(P);
-
-		P->ApplyTeamMaterial();
-		EnsureAIPossession(P);
+		LOG(Error, "Failed to ensure team actors.");
+		return;
 	}
-	if (TeamA->Players.Num() > PlayersPerTeam) TeamA->Players.SetNum(PlayersPerTeam);
-	if (TeamB->Players.Num() > PlayersPerTeam) TeamB->Players.SetNum(PlayersPerTeam);
 
-	// Register with GameState
-	TGS->Teams.Empty();
-	TGS->Teams.Add(TeamA);
-	TGS->Teams.Add(TeamB);
+	TArray<AFootballer*> TeamAPlayers, TeamBPlayers;
+	TeamAPlayers.Reserve(Count);
+	TeamBPlayers.Reserve(Count);
 
-	// Decide kickoff team by nearest-to-ball
-	ABallsack* Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass()));
-	int32 StartTeam = 0;
-	if (Ball)
+	for (int32 i = 0; i < Count; ++i)
 	{
-		auto NearSq = [&](AFootballTeam* T)->double
+		SpawnOne(0, i, TeamA, TeamAPlayers);
+		SpawnOne(1, i, TeamB, TeamBPlayers);
+	}
+
+	LOG(Display, "Spawned TeamA=%d, TeamB=%d.", TeamAPlayers.Num(), TeamBPlayers.Num());
+
+	// Possess human
+	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		AFootballer* ToPossess =
+			(HumanTeamID == 0 && TeamAPlayers.IsValidIndex(5)) ? TeamAPlayers[5] :
+			(HumanTeamID == 1 && TeamBPlayers.IsValidIndex(5)) ? TeamBPlayers[5] :
+			(HumanTeamID == 0 ? (TeamAPlayers.Num() ? TeamAPlayers[0] : nullptr)
+				: (TeamBPlayers.Num() ? TeamBPlayers[0] : nullptr));
+
+		if (ToPossess)
+		{
+			PC->Possess(ToPossess);
+			LOG(Display, "PlayerController possessed %s (Team %d).", *ToPossess->GetName(), HumanTeamID);
+		}
+		else
+		{
+			LOG(Warning, "Could not find a pawn to possess for human team %d.", HumanTeamID);
+		}
+	}
+
+	// Give AI to the non-human team
+	auto GiveAI = [](const TArray<AFootballer*>& Guys)
+		{
+			for (AFootballer* P : Guys)
 			{
-				double Best = TNumericLimits<double>::Max();
-				for (AFootballer* P : T->Players)
-					if (P) Best = FMath::Min(Best, FVector::DistSquared(P->GetActorLocation(), Ball->GetActorLocation()));
-				return Best;
-			};
-		StartTeam = (NearSq(TeamA) <= NearSq(TeamB)) ? 0 : 1;
-	}
-	TGS->SetPossessingTeamID(StartTeam);
-
-	// Possess the human team (Blue=0 / Red=1) – pick CM (index 6) or nearest to centre
-	AFootballTeam* HumanTeam = (HumanTeamID == 0) ? TeamA : TeamB;
-	AFootballer* Best = nullptr;
-	auto FindIdx = [](AFootballTeam* T, int32 I)->AFootballer*
-		{
-			if (!T) return nullptr;
-			for (AFootballer* P : T->Players) if (P && P->PlayerIndex == I) return P;
-			return nullptr;
+				if (P && !P->GetController())
+				{
+					P->SpawnDefaultController();
+				}
+			}
 		};
-	Best = FindIdx(HumanTeam, 6);
-	if (!Best)
+
+	if (HumanTeamID == 0) { GiveAI(TeamBPlayers); }
+	else { GiveAI(TeamAPlayers); }
+}
+
+// --------------------------
+
+AFootballTeam* ADefaultGameMode::EnsureTeamActor(int32 TeamID)
+{
+	const FName Wanted = (TeamID == 0) ? FName(TEXT("FootballTeam0")) : FName(TEXT("FootballTeam1"));
+
+	// Try to find a placed team first
+	for (TActorIterator<AFootballTeam> It(GetWorld()); It; ++It)
 	{
-		double BestDist = TNumericLimits<double>::Max();
-		for (AFootballer* P : HumanTeam->Players)
+		if (It->GetFName() == Wanted)
 		{
-			if (!P) continue;
-			const double D = FMath::Abs((double)P->GetActorLocation().X);
-			if (D < BestDist) { BestDist = D; Best = P; }
+			return *It;
 		}
 	}
-	if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
+
+	// Otherwise spawn a simple one
+	FActorSpawnParameters Params;
+	Params.Name = Wanted;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AFootballTeam* NewTeam = GetWorld()->SpawnActor<AFootballTeam>(
+		AFootballTeam::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, Params);
+
+	if (NewTeam)
 	{
-		if (Best) { PC->Possess(Best); PC->SetViewTarget(Best); }
+		NewTeam->TeamID = TeamID;
+	}
+	return NewTeam;
+}
+
+FVector ADefaultGameMode::FormationHome(int32 TeamID, int32 Index) const
+{
+	// 4-4-2 style (index 0 GK, 1..4 DEF, 5..8 MID, 9..10 FWD)
+	static const float LineX[11] = { -7600, -6000, -6000, -6000, -6000, -2000, -2000, -2000, -2000,  1200,  1800 };
+	static const float LineY[11] = { 0, -2400,  -800,   800,  2400, -2400,  -800,   800,  2400, -1000,  1000 };
+
+	const int32 I = FMath::Clamp(Index, 0, 10);
+	FVector L(LineX[I], LineY[I], 120.f);
+
+	// Mirror X for right team and face the other way (we keep Y to keep symmetry across midline)
+	if (TeamID == 1)
+	{
+		L.X *= -1.f;
+	}
+	return L;
+}
+
+EFootballRole ADefaultGameMode::RoleForIndex(int32 Index)
+{
+	switch (Index)
+	{
+	case 0:  return EFootballRole::GK;
+	case 1:
+	case 2:
+	case 3:
+	case 4:  return EFootballRole::DEF;
+	case 5:
+	case 6:
+	case 7:
+	case 8:  return EFootballRole::MID;
+	default: return EFootballRole::FWD;
 	}
 }
 
-void ADefaultGameMode::EnsureAIPossession(AFootballer* P)
+void ADefaultGameMode::SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamActor, TArray<AFootballer*>& OutList)
 {
+	if (!FootballerClass) return;
+
+	const FVector Home = FormationHome(TeamID, Index);
+	const FRotator Face = (TeamID == 0) ? FRotator(0.f, 0.f, 0.f)
+		: FRotator(0.f, 180.f, 0.f);
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	AFootballer* P = GetWorld()->SpawnActor<AFootballer>(FootballerClass, Home, Face, Params);
 	if (!P) return;
-	if (Cast<APlayerController>(P->GetController())) return; // human will possess later
 
-	if (P->AIControllerClass != AFootballerAIController::StaticClass())
-	{
-		P->AIControllerClass = AFootballerAIController::StaticClass();
-	}
-	P->AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
+	// Basic initialization – these members are on your AFootballer
+	P->TeamID = TeamID;
+	P->PlayerRole = RoleForIndex(Index);
+	P->HomeLocation = Home;
 
-	if (!P->GetController())
+	if (TeamActor)
 	{
-		if (AFootballerAIController* AI = GetWorld()->SpawnActor<AFootballerAIController>())
-		{
-			AI->Possess(P);
-		}
+		TeamActor->RegisterPlayer(P, Index);
 	}
+
+	// AI for non-human team member (human team will be possessed by PlayerController)
+	if (TeamID != HumanTeamID && !P->GetController())
+	{
+		P->SpawnDefaultController();
+	}
+
+	OutList.Add(P);
 }

@@ -4,36 +4,24 @@
 #include "GameFramework/PlayerController.h"
 #include "FootballerController.generated.h"
 
+class AFootballer;
+
 UCLASS()
 class OSF_API AFootballerController : public APlayerController
 {
 	GENERATED_BODY()
 
 public:
-	AFootballerController();
-
 	virtual void SetupInputComponent() override;
-	virtual void Tick(float DeltaSeconds) override;
-
-protected:
-	virtual void BeginPlay() override;
 
 private:
-	class AFootballer* ControlledFootballer = nullptr;
+	AFootballer* GetControlledFootballer() const;
 
-	FVector2D MoveInput = FVector2D::ZeroVector;
-	bool bSprint = false;
-
+	// Input handlers
 	void MoveForward(float Value);
 	void MoveRight(float Value);
 	void SprintPressed();
 	void SprintReleased();
 	void ShootPressed();
 	void PassPressed();
-
-	/** Switch to nearest teammate to the ball (excluding current). */
-	void SwitchToNearestTeammate();
-
-	/** WASD relative to camera yaw. */
-	FVector BuildDesiredMove() const;
 };
