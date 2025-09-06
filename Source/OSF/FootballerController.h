@@ -33,11 +33,25 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Debug")
 	bool bDebugInput = true;
 
+	// Possession tuning (safe defaults)
+	UPROPERTY(EditAnywhere, Category = "Football|Possession")
+	float PickupDistance = 120.f;
+
+	UPROPERTY(EditAnywhere, Category = "Football|Possession")
+	float KeepDistance = 180.f;
+
+	/** Where we hold the ball relative to the pawn (forward, right, up) */
+	UPROPERTY(EditAnywhere, Category = "Football|Possession")
+	FVector HoldOffsetLocal = FVector(90.f, 0.f, 25.f);
+
 	// ---------------- Runtime ----------------
 	UPROPERTY() TArray<AFootballer*> TeamMates;
 	UPROPERTY() AFootballer* CurrentControlled = nullptr;
-	UPROPERTY() AActor* BallActor = nullptr;
 
+	UPROPERTY() AActor* BallActor = nullptr;
+	UPROPERTY() class UPrimitiveComponent* BallRoot = nullptr;
+
+	bool   bHasBall = false;
 	float  AxisForward = 0.f;
 	float  AxisRight = 0.f;
 	double LastSwitchTime = -1000.0;
@@ -74,6 +88,11 @@ private:
 	AFootballer* FindCycle(bool bNext) const;
 	void GetCameraBasis(FVector& OutForward, FVector& OutRight) const;
 	AActor* FindBallActor() const;
+
+	// --- Possession helpers ---
+	void UpdatePossession(float DeltaSeconds);
+	void TakeBall();
+	void ReleaseBall(bool bKicked = false);
 
 	// Debug
 	void Screen(const FString& Msg, const FColor& C = FColor::Green, float T = 1.5f) const;

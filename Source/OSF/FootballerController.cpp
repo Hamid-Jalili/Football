@@ -1,5 +1,6 @@
 ﻿#include "FootballerController.h"
 #include "Footballer.h"
+#include "DefaultGameMode.h"                // for NotifyPossession/ClearPossession
 
 #include "Kismet/GameplayStatics.h"
 #include "Camera/PlayerCameraManager.h"
@@ -9,10 +10,11 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/Engine.h"
 #include "InputCoreTypes.h"
+#include "Components/PrimitiveComponent.h"
 
 AFootballerController::AFootballerController()
 {
-	PrimaryActorTick.bCanEverTick = true; // for small HUD & smooth rotation
+	PrimaryActorTick.bCanEverTick = true;
 	bShowMouseCursor = false;
 	bEnableClickEvents = false;
 	bEnableMouseOverEvents = false;
@@ -23,7 +25,6 @@ void AFootballerController::BeginPlay()
 	Super::BeginPlay();
 	SetInputMode(FInputModeGameOnly{});
 
-	// Cache immediately & once more after GM spawn
 	CacheRefs();
 	FTimerHandle Th;
 	GetWorldTimerManager().SetTimer(Th, this, &AFootballerController::CacheRefs, InitialCacheDelay, false);
@@ -40,19 +41,19 @@ void AFootballerController::SetupInputComponent()
 	InputComponent->BindAxis("MoveForward", this, &AFootballerController::MoveForward);
 	InputComponent->BindAxis("MoveRight", this, &AFootballerController::MoveRight);
 
-	// Actions (kept from your project)
+	// Actions (kept)
 	InputComponent->BindAction("Sprint", IE_Pressed, this, &AFootballerController::SprintPressed);
 	InputComponent->BindAction("Sprint", IE_Released, this, &AFootballerController::SprintReleased);
 	InputComponent->BindAction("Shoot", IE_Pressed, this, &AFootballerController::ShootPressed);
 	InputComponent->BindAction("Pass", IE_Pressed, this, &AFootballerController::PassPressed);
 
-	// Switching (+ your existing "SwitchPlayer" if you had one)
+	// Switching (+ existing "SwitchPlayer" if present)
 	InputComponent->BindAction("SwitchToClosest", IE_Pressed, this, &AFootballerController::SwitchToClosest);
 	InputComponent->BindAction("SwitchPlayer", IE_Pressed, this, &AFootballerController::SwitchToClosest);
 	InputComponent->BindAction("CycleNext", IE_Pressed, this, &AFootballerController::CycleNext);
 	InputComponent->BindAction("CyclePrev", IE_Pressed, this, &AFootballerController::CyclePrev);
 
-	// Raw key probe to prove input reach
+	// Raw key probe
 	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &AFootballerController::DebugKeyD);
 
 	Screen(TEXT("PC Input bound"));
@@ -62,7 +63,9 @@ void AFootballerController::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// Tiny HUD every 0.5s
+	UpdatePossession(DeltaSeconds);
+
+	// tiny HUD every 0.5s
 	if (!bDebugInput) return;
 	const double Now = GetWorld()->TimeSeconds;
 	if (Now - LastTickHudTime < 0.5) return;
@@ -70,9 +73,7 @@ void AFootballerController::Tick(float DeltaSeconds)
 
 	AFootballer* Me = GetControlledFootballer();
 	FString PawnName = GetNameSafe(Me);
-	bool bHasCharMove = false;
-	float Speed = 0.f;
-
+	bool bHasCharMove = false; float Speed = 0.f;
 	if (ACharacter* C = Cast<ACharacter>(Me))
 	{
 		if (UCharacterMovementComponent* Move = C->GetCharacterMovement())
@@ -81,9 +82,9 @@ void AFootballerController::Tick(float DeltaSeconds)
 			Speed = C->GetVelocity().Size();
 		}
 	}
-
-	Screen(FString::Printf(TEXT("Pawn:%s  CharMove:%s  Speed:%.1f  Axis F/R: %.2f / %.2f"),
-		*PawnName, bHasCharMove ? TEXT("Yes") : TEXT("No"), Speed, AxisForward, AxisRight), FColor::White, 0.6f);
+	Screen(FString::Printf(TEXT("Pawn:%s  CharMove:%s  Speed:%.1f  Axis F/R: %.2f / %.2f  HasBall:%s"),
+		*PawnName, bHasCharMove ? TEXT("Yes") : TEXT("No"), Speed, AxisForward, AxisRight, bHasBall ? TEXT("Yes") : TEXT("No")),
+		FColor::White, 0.6f);
 }
 
 void AFootballerController::Screen(const FString& Msg, const FColor& C, float T) const
@@ -124,14 +125,14 @@ void AFootballerController::ApplyDesiredMovement()
 		// 1) keep your hook
 		Me->SetDesiredMovement(Desired);
 
-		// 2) Character fallback for guaranteed motion during tests
+		// 2) Character fallback
 		if (!Desired.IsNearlyZero())
 		{
 			const FVector Dir = Desired.GetSafeNormal();
 			Me->AddMovementInput(Dir, 1.0f);
 		}
 
-		// For non-Character pawns, rotate toward the desired direction
+		// For non-Character pawns, rotate toward desired
 		if (!Desired.IsNearlyZero() && !Cast<ACharacter>(Me))
 		{
 			const float Delta = GetWorld()->GetDeltaSeconds();
@@ -186,6 +187,9 @@ void AFootballerController::SprintReleased()
 }
 void AFootballerController::ShootPressed()
 {
+	// If we hold the ball, release it before the footballer does its shot logic
+	if (bHasBall) ReleaseBall(true);
+
 	if (AFootballer* Me = GetControlledFootballer())
 	{
 		Me->ShootBall(1.f, Me->GetActorForwardVector());
@@ -194,6 +198,8 @@ void AFootballerController::ShootPressed()
 }
 void AFootballerController::PassPressed()
 {
+	if (bHasBall) ReleaseBall(true);
+
 	if (AFootballer* Me = GetControlledFootballer())
 	{
 		Me->PassBall(0.75f, Me->GetActorForwardVector());
@@ -213,6 +219,7 @@ void AFootballerController::CacheRefs()
 	}
 
 	BallActor = FindBallActor();
+	BallRoot = BallActor ? Cast<UPrimitiveComponent>(BallActor->GetRootComponent()) : nullptr;
 
 	Screen(FString::Printf(TEXT("Cached: Teammates=%d, Ball=%s"),
 		TeamMates.Num(), *GetNameSafe(BallActor)));
@@ -305,7 +312,6 @@ void AFootballerController::CycleNext()
 		PossessFootballer(Next);
 	}
 }
-
 void AFootballerController::CyclePrev()
 {
 	if (GetWorld()->TimeSeconds - LastSwitchTime < SwitchCooldown) return;
@@ -349,6 +355,9 @@ void AFootballerController::PossessFootballer(AFootballer* P)
 {
 	if (!P) { Screen(TEXT("Possess: nullptr"), FColor::Red); return; }
 
+	// If we are holding the ball, drop it before switching
+	if (bHasBall) ReleaseBall(false);
+
 	// Restore previous pawn’s orientation & give it AI back
 	if (CurrentControlled && CurrentControlled != P)
 	{
@@ -379,4 +388,70 @@ void AFootballerController::PossessFootballer(AFootballer* P)
 
 	// Re-apply current input immediately so there’s no dead frame
 	ApplyDesiredMovement();
+}
+
+void AFootballerController::UpdatePossession(float DeltaSeconds)
+{
+	if (!BallActor) { BallActor = FindBallActor(); BallRoot = BallActor ? Cast<UPrimitiveComponent>(BallActor->GetRootComponent()) : nullptr; }
+	if (!BallActor || !BallRoot) return;
+
+	AFootballer* Me = GetControlledFootballer();
+	if (!Me) return;
+
+	const FVector BallLoc = BallActor->GetActorLocation();
+	const float   Dist = FVector::Dist(BallLoc, Me->GetActorLocation());
+
+	// If we already have it, hold it in front of us and follow our movement.
+	if (bHasBall)
+	{
+		// If ball somehow got far (tackled/shot), auto-release.
+		if (Dist > KeepDistance)
+		{
+			ReleaseBall(false);
+			return;
+		}
+
+		const FVector Fwd = Me->GetActorForwardVector();
+		const FVector Right = Me->GetActorRightVector();
+		const FVector HoldLoc = Me->GetActorLocation() + Fwd * HoldOffsetLocal.X + Right * HoldOffsetLocal.Y + FVector(0, 0, HoldOffsetLocal.Z);
+
+		BallRoot->SetSimulatePhysics(false);
+		BallActor->SetActorLocation(HoldLoc, false, nullptr, ETeleportType::TeleportPhysics);
+		return;
+	}
+
+	// Not holding: auto-pickup if close and ball isn't moving fast
+	const FVector BallVel = BallRoot->GetComponentVelocity();
+	if (Dist <= PickupDistance && BallVel.Size() < 500.f)
+	{
+		TakeBall();
+	}
+}
+
+void AFootballerController::TakeBall()
+{
+	if (!BallActor || !BallRoot) return;
+	bHasBall = true;
+
+	// notify GM (who is attacking)
+	if (ADefaultGameMode* GM = GetWorld()->GetAuthGameMode<ADefaultGameMode>())
+	{
+		GM->NotifyPossession(GetControlledFootballer());
+	}
+
+	BallRoot->SetSimulatePhysics(false);
+}
+
+void AFootballerController::ReleaseBall(bool /*bKicked*/)
+{
+	if (!bHasBall || !BallActor || !BallRoot) return;
+	bHasBall = false;
+
+	// notify GM
+	if (ADefaultGameMode* GM = GetWorld()->GetAuthGameMode<ADefaultGameMode>())
+	{
+		GM->ClearPossession(GetControlledFootballer());
+	}
+
+	BallRoot->SetSimulatePhysics(true);
 }
