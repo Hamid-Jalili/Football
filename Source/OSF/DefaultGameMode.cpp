@@ -1,10 +1,14 @@
-﻿#include "DefaultGameMode.h"
+﻿// DefaultGameMode.cpp
+#include "DefaultGameMode.h"
 
 #include "Kismet/GameplayStatics.h"
 #include "EngineUtils.h"
 #include "Camera/CameraActor.h"
 #include "Components/CapsuleComponent.h"
 #include "DrawDebugHelpers.h"
+#include "AIController.h"                         // NEW: for MoveToLocation
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 #include "Footballer.h"
 #include "FootballTeam.h"
@@ -44,7 +48,7 @@ void ADefaultGameMode::BeginPlay()
 		Ball = Cast<ABallsack>(UGameplayStatics::GetActorOfClass(GetWorld(), BallClass));
 	}
 
-	// Possess first blue
+	// Possess first blue with local PlayerController (keyboard)
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 	{
 		if (Team0Players.IsValidIndex(0) && Team0Players[0])
@@ -52,7 +56,6 @@ void ADefaultGameMode::BeginPlay()
 			PC->Possess(Team0Players[0]);
 		}
 
-		// Optional: cinematic camera
 		if (ACameraActor* LevelCam =
 			Cast<ACameraActor>(UGameplayStatics::GetActorOfClass(GetWorld(), ACameraActor::StaticClass())))
 		{
@@ -124,6 +127,23 @@ void ADefaultGameMode::SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamAc
 	if (BaseRoles.IsValidIndex(Index)) { P->PlayerRole = BaseRoles[Index]; }
 
 	SnapActorToGround(P);
+
+	// *** NEW: ensure an AIController exists for AI players ***
+	if (P->GetController() == nullptr)
+	{
+		P->SpawnDefaultController();
+	}
+
+	// *** Nice facing for AI characters ***
+	if (ACharacter* C = Cast<ACharacter>(P))
+	{
+		if (UCharacterMovementComponent* Move = C->GetCharacterMovement())
+		{
+			Move->bOrientRotationToMovement = true;
+			Move->bUseControllerDesiredRotation = false;
+			Move->RotationRate = FRotator(0.f, 720.f, 0.f);
+		}
+	}
 
 	TeamActor->RegisterPlayer(P, Index);
 	OutPlayers.Add(P);
@@ -252,9 +272,6 @@ void ADefaultGameMode::SnapActorToGround(AActor* Actor) const
 // ---------------- Simple AI brain ----------------
 void ADefaultGameMode::Think()
 {
-	// Decide who is attacking:
-	//  - If someone holds the ball, that team attacks
-	//  - Otherwise the team whose player is closest to the ball
 	int32 AttackingTeam = PossessingTeamID;
 
 	if (AttackingTeam < 0)
@@ -282,69 +299,174 @@ void ADefaultGameMode::Think()
 	DriveTeamAI(Team1Players, 1, AttackingTeam == 1);
 }
 
+static AFootballer* ClosestTo(const TArray<AFootballer*>& Arr, const FVector& Pt, const TSet<AFootballer*>& Exclude = {})
+{
+	AFootballer* Best = nullptr; float BestD = TNumericLimits<float>::Max();
+	for (AFootballer* P : Arr)
+	{
+		if (!IsValid(P) || Exclude.Contains(P)) continue;
+		const float D = FVector::DistSquared(P->GetActorLocation(), Pt);
+		if (D < BestD) { BestD = D; Best = P; }
+	}
+	return Best;
+}
+
 void ADefaultGameMode::DriveTeamAI(const TArray<AFootballer*>& Team, int32 TeamID, bool bAttacking)
 {
 	AActor* BallActor = Ball ? (AActor*)Ball : UGameplayStatics::GetActorOfClass(GetWorld(), ABallsack::StaticClass());
 	const FVector BallLoc = BallActor ? BallActor->GetActorLocation() : FieldCentreWS;
 
-	// progress along X from -HalfLength..+HalfLength
-	const float BallPhase = FMath::Clamp((BallLoc.X - FieldCentreWS.X) / HalfLength, -1.f, +1.f);
-	const float Dir = (TeamID == 0) ? +1.f : -1.f; // 0 attacks +X, 1 attacks -X
+	const float Dir = (TeamID == 0) ? +1.f : -1.f; // team0 attacks +X
+	const FVector OwnGoal = OwnGoalLocation(TeamID);
 
-	for (int32 i = 0; i < Team.Num(); ++i)
-	{
-		AFootballer* P = Team[i];
-		if (!IsValid(P)) continue;
+	// Pick special roles by closeness to ball
+	TSet<AFootballer*> Used;
+	AFootballer* First = ClosestTo(Team, BallLoc);
+	if (First) Used.Add(First);
+	AFootballer* Second = ClosestTo(Team, BallLoc, Used);
+	if (Second) Used.Add(Second);
 
-		// Skip if this player is human-controlled
-		if (P->GetController() && P->GetController()->IsPlayerController())
-			continue;
+	// Remaining players
+	TArray<AFootballer*> Rest;
+	for (AFootballer* P : Team) if (IsValid(P) && !Used.Contains(P)) Rest.Add(P);
 
-		// Base slot
-		FVector Slot = FormationLocal(i);
-		if (TeamID == 1) Slot = FVector(-Slot.X, -Slot.Y, Slot.Z);
-		FVector Target = ToWorld(Slot);
-
-		// Attack/defend shift on X
-		if (bAttacking)
+	// NOTE: param name is PlayRole (not Role) to avoid shadowing AActor::Role
+	auto SetTargetFor = [&](AFootballer* P, const FVector& Target, EPlayRole PlayRole)
 		{
-			// push up with the ball, capped
-			const float Advance = 800.f * BallPhase * Dir;
-			Target.X += Advance;
+			if (!IsValid(P)) return;
 
-			// two closest supporters hover near the ball
-			const float DistToBall = FVector::Dist2D(P->GetActorLocation(), BallLoc);
-			if (DistToBall < 2200.f)
+			// Steering intent (kept for your pawn logic & debug)
+			FVector Desired = SeekArriveDirection(P->GetActorLocation(), Target);
+			Desired += SeparationVector(P, Team) * SeparationStrength;
+
+			P->SetDesiredMovement(Desired);
+			P->SetDesiredSprintStrength((Target - P->GetActorLocation()).Size() > 700.f ? 1.f : 0.f);
+
+			// *** NEW: Drive actual movement via NavMesh ***
+			if (AAIController* AIC = Cast<AAIController>(P->GetController()))
 			{
-				// fan out around ball on Y
-				const float Side = (i % 2 == 0) ? +1.f : -1.f;
-				Target = BallLoc + FVector(-300.f * Dir, Side * 450.f, 0.f);
+				AIC->MoveToLocation(Target, ArriveRadius, /*bStopOnOverlap*/true, /*bUsePathfinding*/true, /*bProjectToNav*/true, /*bCanStrafe*/false);
 			}
-		}
-		else
-		{
-			// drop back between ball and own goal
-			const float Retreat = 900.f * (0.2f + 0.8f * FMath::Abs(BallPhase)) * Dir;
-			Target.X -= Retreat;
-
-			// pinch toward ball on Y slightly
-			Target.Y = FMath::Lerp(Target.Y, BallLoc.Y, 0.25f);
-		}
-
-		// Clamp to pitch and ground (defensive safety)
-		Target = ClampToField(Target);
-		Target = ProjectXYToGround(Target);
-
-		const FVector ToT = (Target - P->GetActorLocation());
-		const FVector DirMove = ToT.GetSafeNormal();
-
-		P->SetDesiredMovement(DirMove);
-		P->SetDesiredSprintStrength(ToT.Size() > 600.f ? 1.f : 0.f);
+			else if (ACharacter* C = Cast<ACharacter>(P))
+			{
+				// Fallback: direct movement if no AIController (shouldn’t happen now)
+				C->AddMovementInput(Desired, 1.f);
+			}
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-		// debug line to target
-		DrawDebugDirectionalArrow(GetWorld(), P->GetActorLocation(), Target, 50.f,
-			bAttacking ? FColor::Yellow : FColor::Blue, false, 0.12f, 0, 2.f);
+			const FColor CCol = (PlayRole == EPlayRole::Press) ? FColor::Red
+				: (PlayRole == EPlayRole::Support) ? FColor::Yellow
+				: (PlayRole == EPlayRole::Mark) ? FColor::Cyan
+				: FColor::Green;
+			DrawDebugDirectionalArrow(GetWorld(), P->GetActorLocation(), Target, 40.f, CCol, false, 0.12f, 0, 2.f);
 #endif
+		};
+
+	if (bAttacking)
+	{
+		// supporters (triangle)
+		if (First)
+		{
+			const FVector Target = ClampToField(ProjectXYToGround(BallLoc + FVector(SupportAhead * Dir, +SupportWide, 0.f)));
+			SetTargetFor(First, Target, EPlayRole::Support);
+		}
+		if (Second)
+		{
+			const FVector Target = ClampToField(ProjectXYToGround(BallLoc + FVector(SupportAhead * Dir, -SupportWide, 0.f)));
+			SetTargetFor(Second, Target, EPlayRole::Support);
+		}
+
+		// rest: hold/advance the line with width
+		for (int32 i = 0; i < Rest.Num(); ++i)
+		{
+			AFootballer* P = Rest[i];
+			if (!IsValid(P) || (P->GetController() && P->GetController()->IsPlayerController())) continue;
+
+			FVector Slot = FormationLocal(i);
+			if (TeamID == 1) Slot = FVector(-Slot.X, -Slot.Y, Slot.Z);
+
+			FVector Target = ToWorld(Slot);
+			Target.X += AdvanceWithBall * 0.5f * Dir;
+
+			SetTargetFor(P, ClampToField(ProjectXYToGround(Target)), EPlayRole::HoldLine);
+		}
 	}
+	else
+	{
+		// press (contain) two closest
+		auto ContainPoint = [&](float side) -> FVector
+			{
+				const FVector ToGoal = (OwnGoal - BallLoc).GetSafeNormal2D();
+				const FVector Right = FVector::CrossProduct(ToGoal, FVector::UpVector);
+				return BallLoc + ToGoal * PressDistance + Right * side * 200.f;
+			};
+
+		if (First)  SetTargetFor(First, ClampToField(ProjectXYToGround(ContainPoint(+1.f))), EPlayRole::Press);
+		if (Second) SetTargetFor(Second, ClampToField(ProjectXYToGround(ContainPoint(-1.f))), EPlayRole::Press);
+
+		// mark attackers (greedy pairing)
+		const TArray<AFootballer*>& Opp = (TeamID == 0) ? Team1Players : Team0Players;
+		TSet<AFootballer*> Claimed;
+
+		for (AFootballer* P : Rest)
+		{
+			if (!IsValid(P) || (P->GetController() && P->GetController()->IsPlayerController())) continue;
+
+			AFootballer* Att = nullptr; float Best = TNumericLimits<float>::Max();
+			for (AFootballer* A : Opp)
+			{
+				if (!IsValid(A) || Claimed.Contains(A)) continue;
+				const float D = FVector::DistSquared(P->GetActorLocation(), A->GetActorLocation());
+				if (D < Best) { Best = D; Att = A; }
+			}
+			if (Att) Claimed.Add(Att);
+
+			FVector MarkPos = ToWorld(FormationLocal(Rest.Find(P))); // fallback
+			if (Att)
+			{
+				const FVector Apos = Att->GetActorLocation();
+				const FVector AG = (OwnGoal - Apos).GetSafeNormal2D();
+				MarkPos = Apos + AG * 350.f;
+			}
+			MarkPos.X -= RetreatWithBall * 0.5f * Dir;
+
+			SetTargetFor(P, ClampToField(ProjectXYToGround(MarkPos)), EPlayRole::Mark);
+		}
+	}
+}
+
+// ---------- Steering helpers ----------
+FVector ADefaultGameMode::SeekArriveDirection(const FVector& From, const FVector& To) const
+{
+	const FVector ToT = (To - From);
+	const float Dist = ToT.Size2D();
+	if (Dist < KINDA_SMALL_NUMBER) return FVector::ZeroVector;
+
+	const float Strength = (Dist > ArriveRadius) ? 1.f : (Dist / ArriveRadius); // arrive
+	return (ToT.GetSafeNormal2D() * Strength);
+}
+
+FVector ADefaultGameMode::SeparationVector(AFootballer* Self, const TArray<AFootballer*>& SameTeam) const
+{
+	if (!IsValid(Self)) return FVector::ZeroVector;
+	const FVector MyPos = Self->GetActorLocation();
+	FVector Accum = FVector::ZeroVector;
+
+	for (AFootballer* P : SameTeam)
+	{
+		if (!IsValid(P) || P == Self) continue;
+		const FVector Delta = MyPos - P->GetActorLocation();
+		const float D2 = FMath::Max(Delta.SizeSquared2D(), 1.f);
+		if (D2 < SeparationRadius * SeparationRadius)
+		{
+			Accum += Delta.GetSafeNormal2D() * (SeparationRadius * SeparationRadius / D2);
+		}
+	}
+	return Accum;
+}
+
+FVector ADefaultGameMode::OwnGoalLocation(int32 TeamID) const
+{
+	const float X = FieldCentreWS.X + ((TeamID == 0) ? -HalfLength : +HalfLength);
+	return FVector(X, FieldCentreWS.Y, FieldCentreWS.Z);
 }

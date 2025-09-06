@@ -5,18 +5,27 @@
 #include "GameFramework/GameModeBase.h"
 #include "Engine/DataTable.h"
 #include "FormationRow.h"
+#include "DefaultGameMode.generated.h"
 
 class AFootballer;
 class AFootballTeam;
 class ABallsack;
 
-#include "DefaultGameMode.generated.h"
+// Light role tag for debug/intent
+UENUM(BlueprintType)
+enum class EPlayRole : uint8
+{
+	Press,
+	Mark,
+	Support,
+	HoldLine
+};
 
 /**
  * Spawns two teams and the ball.
- * Formation comes from DataTable if assigned.
- * Spawns are grounded via trace; first blue player is possessed.
- * Also tracks possession and drives simple dynamic AI (attack/defend).
+ * Formation may come from a DataTable if assigned.
+ * Spawns are grounded; first blue player is possessed.
+ * Tracks possession and drives simple dynamic AI (attack/defend).
  */
 UCLASS()
 class OSF_API ADefaultGameMode : public AGameModeBase
@@ -53,7 +62,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Formation", meta = (ClampMin = "1", UIMin = "1"))
 	int32 PlayersPerTeam = 11;
 
-	UPROPERTY() TArray<FVector> BaseFormation_Local;
+	UPROPERTY() TArray<FVector>        BaseFormation_Local;
 	UPROPERTY() TArray<EFootballRole> BaseRoles;
 
 	// ---------- Field & Grounding ----------
@@ -95,13 +104,35 @@ protected:
 
 	FTimerHandle ThinkTimer; // periodic AI update
 
+	// ---- AI tuning ----
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float PressDistance = 350.f;          // contain distance to ball
+
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float SupportAhead = 420.f;           // how far ahead of ball supporters sit
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float SupportWide = 520.f;           // how far left/right from ball
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float AdvanceWithBall = 900.f;        // line advance while attacking
+
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float RetreatWithBall = 900.f;        // line drop while defending
+
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float ArriveRadius = 220.f;           // slow down when close to target
+
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float SeparationRadius = 280.f;       // start repulsion if closer than this
+	UPROPERTY(EditAnywhere, Category = "AI")
+	float SeparationStrength = 1.5f;      // repulsion weight
+
 	// ---------- Flow ----------
 	void SpawnTeams();
 	void SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamActor, TArray<AFootballer*>& OutPlayers);
 
 	// ---------- Helpers ----------
-	void BuildBaseFormation();        // fallback 4-4-2
-	void BuildFormationFromTable();   // DT -> BaseFormation_Local / BaseRoles
+	void BuildBaseFormation();
+	void BuildFormationFromTable();
 
 	FVector FormationLocal(int32 Index) const;
 	FVector ToWorld(const FVector& Local) const;
@@ -109,10 +140,15 @@ protected:
 	float   TeamHalfAngle(int32 TeamID) const;
 
 	// Grounding
-	FVector ProjectXYToGround(const FVector& XY) const;    // XY with Z at ground + offset
-	void    SnapActorToGround(AActor* Actor) const;         // adds capsule half-height if present
+	FVector ProjectXYToGround(const FVector& XY) const;
+	void    SnapActorToGround(AActor* Actor) const;
 
-	// AI brain (simple & safe)
+	// AI brain
 	void Think(); // called every 0.1s
 	void DriveTeamAI(const TArray<AFootballer*>& Team, int32 TeamID, bool bAttacking);
+
+	// Steering utilities
+	FVector SeekArriveDirection(const FVector& From, const FVector& To) const;
+	FVector SeparationVector(AFootballer* Self, const TArray<AFootballer*>& SameTeam) const;
+	FVector OwnGoalLocation(int32 TeamID) const;
 };
