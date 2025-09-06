@@ -5,7 +5,6 @@
 #include "EngineUtils.h"
 #include "Camera/CameraActor.h"
 #include "Components/CapsuleComponent.h"
-#include "DrawDebugHelpers.h"
 
 #include "Footballer.h"
 #include "FootballTeam.h"
@@ -22,7 +21,7 @@ void ADefaultGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Formation source: DataTable if assigned, otherwise fallback 4-4-2
+	// Build formation from DT if provided; otherwise use fallback.
 	if (FormationTable)
 	{
 		BuildFormationFromTable();
@@ -33,7 +32,7 @@ void ADefaultGameMode::BeginPlay()
 		PlayersPerTeam = BaseFormation_Local.Num() > 0 ? BaseFormation_Local.Num() : PlayersPerTeam;
 	}
 
-	// Field centre – use world origin unless you have a dedicated pitch actor to sample.
+	// Pitch origin (keep world origin unless you have a dedicated field actor).
 	FieldCentreWS = FVector::ZeroVector;
 
 	SpawnTeams();
@@ -45,14 +44,17 @@ void ADefaultGameMode::BeginPlay()
 		GetWorld()->SpawnActor<ABallsack>(BallClass, BallLoc, FRotator::ZeroRotator);
 	}
 
-	// View + input hookup: possess Team0’s first player, keep view on a placed camera if any
+	// Ensure we actually possess a blue player at start.
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0))
 	{
-		if (Team0Players.Num() > 0 && Team0Players[0])
+		if (Team0Players.IsValidIndex(0) && Team0Players[0])
 		{
 			PC->Possess(Team0Players[0]);
 		}
-		if (ACameraActor* LevelCam = Cast<ACameraActor>(UGameplayStatics::GetActorOfClass(GetWorld(), ACameraActor::StaticClass())))
+
+		// (Optional) keep view on any placed camera:
+		if (ACameraActor* LevelCam =
+			Cast<ACameraActor>(UGameplayStatics::GetActorOfClass(GetWorld(), ACameraActor::StaticClass())))
 		{
 			PC->SetViewTargetWithBlend(LevelCam, 0.f);
 		}
@@ -86,9 +88,9 @@ void ADefaultGameMode::SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamAc
 	const FVector L = FormationLocal(Index);
 	const FVector LocalForTeam = (TeamID == 0) ? L : FVector(-L.X, -L.Y, L.Z);
 
-	// XY clamped within pitch, then project to ground to get a proper Z.
-	const FVector XY = ClampToField(ToWorld(LocalForTeam));
-	FVector SpawnLoc = ProjectXYToGround(XY);
+	// Clamp XY inside pitch, then project to ground for correct Z.
+	const FVector XYWorld = ClampToField(ToWorld(LocalForTeam));
+	FVector SpawnLoc = ProjectXYToGround(XYWorld);
 
 	FRotator SpawnRot(0.f, TeamHalfAngle(TeamID), 0.f);
 
@@ -100,13 +102,13 @@ void ADefaultGameMode::SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamAc
 
 	P->TeamID = TeamID;
 
-	// Optional: apply DataTable Role
+	// Optional: apply DT role if present
 	if (BaseRoles.IsValidIndex(Index))
 	{
 		P->PlayerRole = BaseRoles[Index];
 	}
 
-	// Final safety: lift by capsule half-height so feet sit on the grass even on slopes.
+	// Final safety—raise to sit on the ground even on slopes
 	SnapActorToGround(P);
 
 	TeamActor->RegisterPlayer(P, Index);
@@ -125,7 +127,6 @@ void ADefaultGameMode::BuildFormationFromTable()
 		return;
 	}
 
-	// Collect rows
 	TArray<FName> RowNames = FormationTable->GetRowNames();
 
 	struct FRowTmp { int32 Index; FVector Pos; EFootballRole Role; };
@@ -139,7 +140,6 @@ void ADefaultGameMode::BuildFormationFromTable()
 		Rows.Add({ Row->Index, Row->LocalPosition, Row->Role });
 	}
 
-	// Sort by Index for stable order
 	Rows.Sort([](const FRowTmp& A, const FRowTmp& B) { return A.Index < B.Index; });
 
 	for (const FRowTmp& R : Rows)
@@ -150,7 +150,7 @@ void ADefaultGameMode::BuildFormationFromTable()
 
 	PlayersPerTeam = BaseFormation_Local.Num();
 
-	// Safety fallback
+	// Safety
 	if (PlayersPerTeam <= 0)
 	{
 		BuildBaseFormation();
@@ -208,7 +208,6 @@ float ADefaultGameMode::TeamHalfAngle(int32 TeamID) const
 	return (TeamID == 0) ? 0.f : 180.f;
 }
 
-/** Return XY with Z set to ground hit (or centre Z if no hit) plus GroundZOffset. */
 FVector ADefaultGameMode::ProjectXYToGround(const FVector& XY) const
 {
 	const FVector Start(XY.X, XY.Y, FieldCentreWS.Z + GroundTraceUp);
@@ -225,16 +224,13 @@ FVector ADefaultGameMode::ProjectXYToGround(const FVector& XY) const
 	return FVector(XY.X, XY.Y, Z + GroundZOffset);
 }
 
-/** Lift an actor so its capsule rests on the ground at its XY. */
 void ADefaultGameMode::SnapActorToGround(AActor* Actor) const
 {
 	if (!Actor) return;
 
-	// Fit Z to ground at current XY:
 	FVector L = Actor->GetActorLocation();
 	L = ProjectXYToGround(L);
 
-	// If the actor has a capsule, lift by half-height so feet are on the surface.
 	if (UCapsuleComponent* Cap = Actor->FindComponentByClass<UCapsuleComponent>())
 	{
 		L.Z += Cap->GetScaledCapsuleHalfHeight();
