@@ -1,154 +1,128 @@
-﻿// DefaultGameMode.h
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
-#include "Engine/DataTable.h"
-#include "FormationRow.h"
 #include "DefaultGameMode.generated.h"
 
+class UDataTable;
+class ABallsack;
 class AFootballer;
 class AFootballTeam;
-class ABallsack;
+struct FFormationRow; // defined in FormationRow.h
 
-// Light role tag for debug/intent
 UENUM(BlueprintType)
 enum class EPlayRole : uint8
 {
-	Press,
-	Mark,
-	Support,
-	HoldLine
+    HoldLine  UMETA(DisplayName = "Hold Line"),
+    Press     UMETA(DisplayName = "Press"),
+    Support   UMETA(DisplayName = "Support"),
+    Mark      UMETA(DisplayName = "Mark")
 };
 
-/**
- * Spawns two teams and the ball.
- * Formation may come from a DataTable if assigned.
- * Spawns are grounded; first blue player is possessed.
- * Tracks possession and drives simple dynamic AI (attack/defend).
- */
 UCLASS()
 class OSF_API ADefaultGameMode : public AGameModeBase
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	ADefaultGameMode();
+    ADefaultGameMode();
+    virtual void BeginPlay() override;
 
-	// Called by controllers/AI when ball possession changes
-	UFUNCTION(BlueprintCallable, Category = "Match")
-	void NotifyPossession(AFootballer* NewOwner);
-
-	UFUNCTION(BlueprintCallable, Category = "Match")
-	void ClearPossession(AFootballer* OldOwner);
+    // Possession API (kept)
+    UFUNCTION(BlueprintCallable) void NotifyPossession(AFootballer* NewOwner);
+    UFUNCTION(BlueprintCallable) void ClearPossession(AFootballer* OldOwner);
 
 protected:
-	virtual void BeginPlay() override;
+    // ---------- Tunables ----------
+    UPROPERTY(EditAnywhere, Category = "Pitch") float HalfLength = 9000.f;
+    UPROPERTY(EditAnywhere, Category = "Pitch") float HalfWidth = 6000.f;
 
-	// ---------- Classes ----------
-	UPROPERTY(EditDefaultsOnly, Category = "Classes")
-	TSubclassOf<AFootballer> FootballerClass;
+    UPROPERTY(EditAnywhere, Category = "Spawning") TSubclassOf<AFootballer>  FootballerClass;
+    UPROPERTY(EditAnywhere, Category = "Spawning") TSubclassOf<AFootballTeam> TeamClass;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Classes")
-	TSubclassOf<AFootballTeam> TeamClass;
+    UPROPERTY(EditAnywhere, Category = "Ball") TSubclassOf<ABallsack> BallClass;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Classes")
-	TSubclassOf<ABallsack> BallClass;
+    UPROPERTY(EditAnywhere, Category = "Formation") UDataTable* FormationTable = nullptr;
 
-	// ---------- Formation ----------
-	UPROPERTY(EditAnywhere, Category = "Formation")
-	UDataTable* FormationTable = nullptr;
+    // Local-space formation points (X forward, Y right, origin at field center)
+    UPROPERTY(EditAnywhere, Category = "Formation") TArray<FVector> BaseFormation_Local;
 
-	UPROPERTY(EditAnywhere, Category = "Formation", meta = (ClampMin = "1", UIMin = "1"))
-	int32 PlayersPerTeam = 11;
+    // Optional base roles; raw bytes so we don't fight UHT/Blueprint with enums
+    UPROPERTY(EditAnywhere, Category = "Formation") TArray<uint8> BaseRoles;
 
-	UPROPERTY() TArray<FVector>        BaseFormation_Local;
-	UPROPERTY() TArray<EFootballRole> BaseRoles;
+    UPROPERTY(EditAnywhere, Category = "Formation") int32 PlayersPerTeam = 11;
 
-	// ---------- Field & Grounding ----------
-	UPROPERTY() FVector FieldCentreWS = FVector::ZeroVector;
+    // Keep-shape bias (0..1) – higher = tighter lines
+    UPROPERTY(EditAnywhere, Category = "AI|Shape") float HomeWeight = 0.65f;
 
-	UPROPERTY(EditAnywhere, Category = "Field")
-	float HalfLength = 4600.f;
+    // Tactics
+    UPROPERTY(EditAnywhere, Category = "AI|Tactics") float AdvanceWithBall = 1400.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Tactics") float RetreatWithBall = 1200.f;
 
-	UPROPERTY(EditAnywhere, Category = "Field")
-	float HalfWidth = 3000.f;
+    // Support triangle offsets
+    UPROPERTY(EditAnywhere, Category = "AI|Support") float SupportAhead = 750.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Support") float SupportWide = 900.f;
 
-	UPROPERTY(EditAnywhere, Category = "Field|Grounding")
-	TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_Visibility;
+    // Steering
+    UPROPERTY(EditAnywhere, Category = "AI|Steering") float ArriveRadius = 260.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Steering") float SeparationRadius = 420.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Steering") float SeparationStrength = 0.7f;
 
-	UPROPERTY(EditAnywhere, Category = "Field|Grounding")
-	float GroundTraceUp = 8000.f;
+    // Keeper parameters
+    UPROPERTY(EditAnywhere, Category = "AI|Keeper") float KeeperDepth = 900.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Keeper") float KeeperChaseRadius = 1200.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Keeper") float PenBoxDepth = 2200.f;
+    UPROPERTY(EditAnywhere, Category = "AI|Keeper") float PenBoxHalfWidth = 2200.f;
 
-	UPROPERTY(EditAnywhere, Category = "Field|Grounding")
-	float GroundTraceDown = 20000.f;
+    // Grounding trace
+    UPROPERTY(EditAnywhere, Category = "Grounding") float GroundTraceUp = 2000.f;
+    UPROPERTY(EditAnywhere, Category = "Grounding") float GroundTraceDown = 4000.f;
+    UPROPERTY(EditAnywhere, Category = "Grounding") TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_Visibility;
+    UPROPERTY(EditAnywhere, Category = "Grounding") float GroundZOffset = 0.f;
 
-	UPROPERTY(EditAnywhere, Category = "Field|Grounding")
-	float GroundZOffset = 2.f;
+    // ---------- State ----------
+    FVector FieldCentreWS = FVector::ZeroVector;
 
-	// ---------- Runtime ----------
-	UPROPERTY() AFootballTeam* Team0 = nullptr;
-	UPROPERTY() AFootballTeam* Team1 = nullptr;
+    UPROPERTY(VisibleAnywhere, Category = "Teams") AFootballTeam* Team0 = nullptr;
+    UPROPERTY(VisibleAnywhere, Category = "Teams") AFootballTeam* Team1 = nullptr;
 
-	UPROPERTY() TArray<AFootballer*> Team0Players;
-	UPROPERTY() TArray<AFootballer*> Team1Players;
+    UPROPERTY(VisibleAnywhere, Category = "Teams") TArray<AFootballer*> Team0Players;
+    UPROPERTY(VisibleAnywhere, Category = "Teams") TArray<AFootballer*> Team1Players;
 
-	UPROPERTY() ABallsack* Ball = nullptr;
+    UPROPERTY(VisibleAnywhere, Category = "Ball") ABallsack* Ball = nullptr;
 
-	// Possession / attack state
-	UPROPERTY(VisibleAnywhere, Category = "Match")
-	TWeakObjectPtr<AFootballer> PossessingPlayer;
+    // Possession memory
+    TWeakObjectPtr<AFootballer> PossessingPlayer;
+    int32 PossessingTeamID = -1;
 
-	UPROPERTY(VisibleAnywhere, Category = "Match")
-	int32 PossessingTeamID = -1; // -1 = none
+    FTimerHandle ThinkTimer;
 
-	FTimerHandle ThinkTimer; // periodic AI update
+    // ---------- Flow ----------
+    void SpawnTeams();
+    void SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamActor, TArray<AFootballer*>& OutPlayers);
 
-	// ---- AI tuning ----
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float PressDistance = 350.f;          // contain distance to ball
+    void BuildFormationFromTable();
+    void BuildBaseFormation();
 
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float SupportAhead = 420.f;           // how far ahead of ball supporters sit
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float SupportWide = 520.f;           // how far left/right from ball
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float AdvanceWithBall = 900.f;        // line advance while attacking
+    void Think();
+    void DriveTeamAI(const TArray<AFootballer*>& Team, int32 TeamID, bool bAttacking);
 
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float RetreatWithBall = 900.f;        // line drop while defending
+    // ---------- Helpers ----------
+    FVector FormationLocal(int32 Index) const;
+    FVector ToWorld(const FVector& Local) const;
+    FVector ClampToField(const FVector& P) const;
+    float  TeamHalfAngle(int32 TeamID) const;
 
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float ArriveRadius = 220.f;           // slow down when close to target
+    FVector ProjectXYToGround(const FVector& XY) const;
+    void    SnapActorToGround(AActor* Actor) const;
 
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float SeparationRadius = 280.f;       // start repulsion if closer than this
-	UPROPERTY(EditAnywhere, Category = "AI")
-	float SeparationStrength = 1.5f;      // repulsion weight
+    FVector SeekArriveDirection(const FVector& From, const FVector& To) const;
+    FVector SeparationVector(AFootballer* Self, const TArray<AFootballer*>& SameTeam) const;
 
-	// ---------- Flow ----------
-	void SpawnTeams();
-	void SpawnOne(int32 TeamID, int32 Index, AFootballTeam* TeamActor, TArray<AFootballer*>& OutPlayers);
+    FVector OwnGoalLocation(int32 TeamID) const;
 
-	// ---------- Helpers ----------
-	void BuildBaseFormation();
-	void BuildFormationFromTable();
-
-	FVector FormationLocal(int32 Index) const;
-	FVector ToWorld(const FVector& Local) const;
-	FVector ClampToField(const FVector& P) const;
-	float   TeamHalfAngle(int32 TeamID) const;
-
-	// Grounding
-	FVector ProjectXYToGround(const FVector& XY) const;
-	void    SnapActorToGround(AActor* Actor) const;
-
-	// AI brain
-	void Think(); // called every 0.1s
-	void DriveTeamAI(const TArray<AFootballer*>& Team, int32 TeamID, bool bAttacking);
-
-	// Steering utilities
-	FVector SeekArriveDirection(const FVector& From, const FVector& To) const;
-	FVector SeparationVector(AFootballer* Self, const TArray<AFootballer*>& SameTeam) const;
-	FVector OwnGoalLocation(int32 TeamID) const;
+    void ComputeKeeperTarget(
+        int32 TeamID, const FVector& BallLoc,
+        FVector& OutGoal, FVector& OutKeeperHome,
+        FVector& OutBoxMin, FVector& OutBoxMax) const;
 };
